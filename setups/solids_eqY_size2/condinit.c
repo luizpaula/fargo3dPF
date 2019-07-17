@@ -1,0 +1,256 @@
+#include "fargo3d.h"
+
+void InitDensGas()
+
+{
+  int i,j,k;
+  real* Sigma = Density->field_cpu;
+    
+  boolean GhostInclude = TRUE;
+  
+  int begin_k =(GhostInclude ? 0 : NGHZ);
+  int end_k = Nz+2*NGHZ-begin_k;
+  int begin_j =(GhostInclude ? 0 : NGHY);
+  int end_j = Ny+2*NGHY-begin_j;
+  int begin_i = (GhostInclude ? 0 : NGHX);
+  int end_i = Nx+2*NGHX-begin_i;
+
+  for (k = begin_k; k<end_k; k++) {
+    for (j = begin_j; j<end_j; j++) {
+      for (i = begin_i; i<end_i; i++) {
+	Sigma[l] = SIGMA0*pow((Ymed(j)/R0),-SIGMASLOPE)*(1.0+NOISE*(drand48()-.5));
+      }
+    }
+  }
+
+}
+
+void InitVelGas() {
+
+  int i,j,k;
+  real Omega;
+  real r;
+
+  real* Vt = Vx->field_cpu;
+  real* Vr = Vy->field_cpu;
+    
+  boolean GhostInclude = TRUE;
+  
+  int begin_k =(GhostInclude ? 0 : NGHZ);
+  int end_k = Nz+2*NGHZ-begin_k;
+  int begin_j =(GhostInclude ? 0 : NGHY);
+  int end_j = Ny+2*NGHY-begin_j;
+  int begin_i = (GhostInclude ? 0 : NGHX);
+  int end_i = Nx+2*NGHX-begin_i;
+
+  for (k = begin_k; k<end_k; k++) {
+    for (j = begin_j; j<end_j; j++) {
+      for (i = begin_i; i<end_i; i++) {
+  
+        /*Velocity tangencial*/
+	r = Ymed(j);
+	Omega = sqrt(G*MSTAR/r/r/r);
+	Vt[l] = Omega*r*sqrt(1.0+pow(ASPECTRATIO,2)*pow(r/R0,2*FLARINGINDEX)*
+			  (2.0*FLARINGINDEX - 1.0 - SIGMASLOPE));
+	Vt[l] -= OMEGAFRAME*r;
+	Vt[l] = Vt[l]*(1.+ASPECTRATIO*NOISE*(drand48()-.5));
+
+        /*Velocity radial*/
+	Vr[l] = -3.0*ALPHA*r*Omega*pow(ASPECTRATIO,2)*(FLARINGINDEX - SIGMASLOPE + 1)*pow(r/R0,2*FLARINGINDEX);
+        Vr[l] = Vr[l]*(1.+ASPECTRATIO*NOISE*(drand48()-.5));
+      }
+    }
+  }    
+}
+
+void InitSoundSpeedGas() {
+
+  int i,j,k;
+  real r;
+  real vk;
+  real cs;
+
+  real* e = Energy->field_cpu;
+  real* Sigma = Density->field_cpu;
+
+  boolean GhostInclude = TRUE;
+  
+  int begin_k =(GhostInclude ? 0 : NGHZ);
+  int end_k = Nz+2*NGHZ-begin_k;
+  int begin_j =(GhostInclude ? 0 : NGHY);
+  int end_j = Ny+2*NGHY-begin_j;
+  int begin_i = (GhostInclude ? 0 : NGHX);
+  int end_i = Nx+2*NGHX-begin_i;
+  
+  for (k = begin_k; k<end_k; k++) {
+    for (j = begin_j; j<end_j; j++) {
+      for (i = begin_i; i<end_i; i++) {	
+
+        /*Velocity of sound*/
+	r = Ymed(j);
+	vk = sqrt(G*MSTAR/r);
+	cs = ASPECTRATIO * pow(Ymed(j)/R0, FLARINGINDEX) * vk;
+
+        /*Case Isothermal*/
+        /*Pressure P = rho cs*cs*/
+        #ifdef ISOTHERMAL
+	   e[l] = cs;
+        #endif
+
+        /*Case Adiabatic*/
+        /*Pressure P = (gamma - 1) e */
+        #ifdef ADIABATIC
+	   e[l] = cs*cs*Sigma[l]/(GAMMA-1.0);
+        #endif
+        }
+    }
+  }   
+ 
+}
+
+void InitSolDens()
+
+{
+  int i,j,k;
+  real* Sigma = Density->field_cpu;
+  real* Sigmasol = Sigmam->field_cpu;
+    
+  boolean GhostInclude = TRUE;
+  real rcell;
+  real Sigmagas;
+  
+  int begin_k =(GhostInclude ? 0 : NGHZ);
+  int end_k = Nz+2*NGHZ-begin_k;
+  int begin_j =(GhostInclude ? 0 : NGHY);
+  int end_j = Ny+2*NGHY-begin_j;
+  int begin_i = (GhostInclude ? 0 : NGHX);
+  int end_i = Nx+2*NGHX-begin_i;
+
+  for (k = begin_k; k<end_k; k++) {
+    for (j = begin_j; j<end_j; j++) {
+      for (i = begin_i; i<end_i; i++) {
+
+        /*RADIAL POSITION OF CELL*/
+        #ifdef CARTESIAN
+           rcell = sqrt(xmed(i)*xmed(i) + ymed(j)*ymed(j) + zmed(k)*zmed(k));
+        #endif
+        #ifdef CYLINDRICAL
+           rcell = ymed(j);
+        #endif
+        #ifdef SPHERICAL
+           rcell = ymed(j);
+        #endif
+
+        /*SUPERFICIAL DENSITY OF GAS IN THE CELL*/ 
+        #ifdef Z
+           dz = zmed(1) - zmed(0);
+           Sigmagas = Sigma[l]*dz;
+        #else 
+           Sigmagas = Sigma[l];
+        #endif
+
+        if (rcell < RICE) Sigmasol[l] = Sigmagas*FRI*FDG;
+        else Sigmasol[l] = Sigmagas*1.0*FDG;
+      }
+    }
+  }
+
+}
+
+void Eccinccoldinit(){
+
+  int i,j,k;
+  real* Sigma = Density->field_cpu;
+  real* ecc = Ecc->field_cpu;
+  real* inc = Inc->field_cpu;
+  real* eccquad = Eccquad->field_cpu;
+  real* incquad = Incquad->field_cpu;
+
+  boolean GhostInclude = TRUE;
+
+  int begin_k =(GhostInclude ? 0 : NGHZ);
+  int end_k = Nz+2*NGHZ-begin_k;
+  int begin_j =(GhostInclude ? 0 : NGHY);
+  int end_j = Ny+2*NGHY-begin_j;
+  int begin_i = (GhostInclude ? 0 : NGHX);
+  int end_i = Nx+2*NGHX-begin_i;
+
+  real rcell;
+  real m;
+  real dp;
+  real Sigmagas;
+  real rhogas;
+
+  i = j = k = 0;
+
+  for (k = begin_k; k<end_k; k++) {
+    for (j = begin_j; j<end_j; j++) {
+      for (i = begin_i; i<end_i; i++) {
+
+          /*RADIAL POSITION OF CELL*/
+          #ifdef CARTESIAN
+             rcell = sqrt(xmed(i)*xmed(i) + ymed(j)*ymed(j) + zmed(k)*zmed(k));
+          #endif
+          #ifdef CYLINDRICAL
+             rcell = ymed(j);
+          #endif
+          #ifdef SPHERICAL
+             rcell = ymed(j);
+          #endif
+
+          /*volumetric density of gas, see Armitage - Planet formation - Eq. 2.9*/ 
+          #ifdef Z
+             rhogas = Sigma[l];
+             Sigmagas = rhogas*dz;
+          #else 
+             Sigmagas = Sigma[l];
+             rhogas = (1.0/sqrt(2.0*PI))*(Sigmagas/(ASPECTRATIO*rcell));
+          #endif
+
+          if (rcell < RICE) dp = RHOROCKY;
+          else dp = RHOICE;
+          m = dp*(4.0/3.0)*PI*pow(RM,3.0);
+
+          ecc[l] = 2.31*(pow(m,4.0/15.0)*pow(Sigmagas,1.0/5.0)*pow(rcell,1.0/5.0)*pow(RHOM,2.0/15.0))*pow(CD,-1.0/5.0)*pow(rhogas,-1.0/5.0)*pow(MSTAR,-2.0/5.0);
+          inc[l] = ecc[l]/2.0;
+          eccquad[l] = ecc[l]*ecc[l];
+          incquad[l] = inc[l]*inc[l];
+      }
+    }
+  }
+}
+
+void CondInit() {
+  
+  OUTPUT(Density);
+  OUTPUT(Energy);
+  OUTPUT(Vx);
+  OUTPUT(Vy);
+#ifdef COREACCRETION
+  OUTPUT(Sigmam);
+  OUTPUT(Ecc);
+  OUTPUT(Inc);
+  OUTPUT(Eccquad);
+  OUTPUT(Incquad);
+#endif
+
+#ifdef PLANETS
+  Sys = InitPlanetarySystem(PLANETCONFIG);
+  ListPlanets();
+  if(COROTATING)
+    OMEGAFRAME = GetPsysInfo(FREQUENCY);
+  else
+#endif
+  OMEGAFRAME = OMEGAFRAME;
+
+  InitDensGas();
+  InitSoundSpeedGas();
+  InitVelGas();
+
+#ifdef COREACCRETION
+     InitSolDens();
+#ifndef EQUILIBRIUM
+     Eccinccoldinit();
+#endif
+#endif
+}

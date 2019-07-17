@@ -1,0 +1,192 @@
+//<FLAGS>
+//#define __GPU
+//#define __NOPROTO
+//<\FLAGS>
+
+//<INCLUDES>
+#include "fargo3d.h"
+//<\INCLUDES>
+
+void Accretion_gas(real dt, int kp){
+   
+//<USER_DEFINED>
+  INPUT(Vx);
+  INPUT(Vy);
+  INPUT(Density);
+  INPUT(Energy);
+//<\USER_DEFINED>
+
+//<EXTERNAL>
+  real* cs = Energy->field_cpu;
+  real* dens = Density->field_cpu;
+  int NbPlanets = Sys->nb; 
+  real* xpl = Sys->x_cpu;
+  real* ypl = Sys->y_cpu;
+  real* zpl = Sys->z_cpu;
+  real* Vxpl = Sys->vx;
+  real* Vypl = Sys->vy;
+  real* mpl = Sys->mass_cpu;
+  real* Menv = Sys->menv_cpu;
+  real* Vt = Vx->field_cpu;
+  real* Vr = Vy->field_cpu;
+  int pitch  = Pitch_cpu;
+  int stride = Stride_cpu;
+  int size_x = Nx+2*NGHX;
+  int size_y = Ny+2*NGHY;
+  int size_z = Nz+2*NGHZ;
+//<\EXTERNAL>
+
+//<INTERNAL>
+  real tauKH;
+  real dMdtKH;
+  real b = 9.0;
+  real c = 3.0;
+  real year;
+  real RBondi;
+  real RH;
+  real apl;
+  real Raij;
+  real Trij;
+  real dMplanet;
+  real dPxPlanet;
+  real dPyPlanet;
+  real PxPlanet;
+  real PyPlanet;
+  real distance;
+  real dx_cel_pl;
+  real dy_cel_pl;
+  real dvx_cel_pl;
+  real dvy_cel_pl;
+  real deltaV;
+  real facc;
+  real vxcel, vycel;
+  real vtcel, vrcel;
+  real deltaM;
+  real dMPlanet;
+  real temp;
+  int ll;
+  int i;
+  int j;
+  int k;
+//<\INTERNAL>
+
+  dMPlanet = dPxPlanet = dPxPlanet = 0.0;
+  apl = sqrt(xpl[kp]*xpl[kp] + ypl[kp]*ypl[kp] + zpl[kp]*zpl[kp]);
+  RH = apl*pow(mpl[kp]/(3.0*MSTAR),(1.0/3.0));
+
+  /*Kelvin-Helmholtz timescale*/
+  tauKH = pow(10.0,b)*pow(mpl[kp]/MEARTH,-c);
+  #ifdef MKS
+     year = 31536000.0;
+  #endif
+  #ifdef CGS
+     year = 31536000.0;
+  #endif
+  #if !(defined(MKS) || defined (CGS))
+     year = 31536000.0/(sqrt(R0*R0*R0/G/MSTAR));
+  #endif
+  tauKH = tauKH*year;
+  dMdtKH = mpl[kp]/tauKH;
+
+  /**Momentum of the planet in cartesian (padrão do planeta no FARGO)**/
+  PxPlanet = mpl[kp]*Vxpl[kp];
+  PyPlanet = mpl[kp]*Vypl[kp];
+
+#ifdef Z
+  for (k=0;k<size_z;k++) {
+#endif
+#ifdef Y
+    for (j=0;j<size_y;j++) {
+#endif
+#ifdef X
+      for (i=0;i<size_x;i++) {
+#endif
+//<#>
+         ll = l;
+
+         /*we calculate the speed of sound in the cell that contain the planet kp*/
+         #ifdef ISOTHERMAL
+            vslocal = cs[ll];
+         #endif
+         #ifdef ADIABATIC /*vslocal^2 =sqrt(gamma) * (gamma - 1) * e*/
+            vslocal = sqrt(GAMMA * (GAMMA - 1.0) * cs[ll]/dens[ll]); 
+         #endif
+         #ifdef POLYTROPIC
+            vslocal = sqrt(cs[ll]*gamma*pow(dens[ll],GAMMA-1.0));
+         #endif
+
+         #ifdef CARTESIAN/*i -> x, j -> y, k -> z */ 
+            xcel = xmed(j);
+            ycel = ymed(j);
+            vxcel = Vt[ll];
+            vycel = Vr[ll];       
+         #endif
+
+         #ifdef CYLINDRICAL/*i -> x (azimuthal angle), j -> y (cylindrical radius), k -> z */
+            thetacel = xmed(i);
+            rcel = ymed(j); 
+            xcel = rcel*cos(thetacel);
+            ycel = rcel*sin(thetacel);
+            vtcel = 0.5*(Vt[ll] + Vt[lxp]) + ymed(j)*OMEGAFRAME;
+            vrcel = 0.5*(Vr[ll] + Vr[lyp]);
+            vxcel = (vrcel*xcel - vtcel*ycel)/ymed(j);
+            vycel = (vrcel*ycel + vtcel*xcel)/ymed(j);
+         #endif
+
+         #ifdef SPHERICAL/*i -> x (azimuthal angle), j -> y (spherical radius), k -> z (colatitude)*/
+                //working
+         #endif                
+
+         dx_cel_pl = xpl - xcel;
+         dy_cel_pl = ypl - ycel;
+         dvx_cel_pl = vxpl - vxcel;
+         dvy_cel_pl = vypl - vycel;
+      
+         distance = sqrt(dx_cel_pl*dx_cel_pl + dy_cel_pl*dy_cel_pl);
+         deltaV = sqrt(dvx_cel_pl*dvx_cel_pl + dvy_cel_pl*dvy_cel_pl);
+         
+         RBondi = 2.0*G*mpl[kp]/(cs[ll]*cs[ll] + deltaV*deltaV);
+
+         Raij = MIN(RBondi,RH);
+
+         if (distance < Raij){
+            Trij = 2*Pi*sqrt(Raij*Raij*Raij/(G*mpl[kp]));
+            facc = dt*Trij;
+            deltaM = facc*dens[ll]*SurfZ(j,k);
+            //dens[ll] *= (1.0 - facc);
+            //dPxPlanet += deltaM*vxcel;
+            //dPyPlanet += deltaM*vycel;
+            dMPlanet += deltaM;
+            }
+//<\#>
+#ifdef X
+      }
+#endif
+#ifdef Y
+    }
+#endif
+#ifdef Z
+  }
+#endif
+
+  MPI_Allreduce(&dMplanet,&temp,1,MPI_DOUBLE, MPI_SUM,MPI_COMM_WORLD);
+  dMPlanet = temp;
+         
+  MPI_Allreduce(&dPxPlanet,&temp,1,MPI_DOUBLE, MPI_SUM,MPI_COMM_WORLD);   
+  dPxPlanet = temp;
+
+  MPI_Allreduce(&dPyPlanet,&temp,1,MPI_DOUBLE, MPI_SUM,MPI_COMM_WORLD);   
+  dPyPlanet = temp;
+              
+  PyPlanet += dPyPlanet;
+  PxPlanet += dPxPlanet;
+
+  if (Sys->FeelDisk[kp] == YES){
+     Vxpl[kp] = PxPlanet/mpl[kp];
+     Vypl[kp] = PyPlanet/mpl[kp];
+     }
+
+  Menv[kp] = dMplanet;
+  mplanet[kp] += Menv[kp];
+}
+

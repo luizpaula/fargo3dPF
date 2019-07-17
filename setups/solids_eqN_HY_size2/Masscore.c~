@@ -1,0 +1,142 @@
+//<FLAGS>
+//#define __GPU
+//#define __NOPROTO
+//<\FLAGS>
+
+//<INCLUDES>
+#include "fargo3d.h"
+//<\INCLUDES>
+
+void Masscore_cpu(real dt, int kp) {
+
+//<USER_DEFINED>
+  INPUT(Sigmam);
+//<\USER_DEFINED>
+
+//<EXTERNAL>
+  real* Sigma = Sigmam->field_cpu;
+  real* mpl = Sys->mass_cpu;
+  real* accsolids = Sys->accsol_cpu;
+  real* xpl = Sys->x_cpu;
+  real* ypl = Sys->y_cpu;
+  real* zpl = Sys->z_cpu;
+  real* Rcore = Sys->rcore_cpu;
+  int pitch  = Pitch_cpu;
+  int stride = Stride_cpu;
+  int size_x = Nx+2*NGHX;
+  int size_y = Ny+2*NGHY;
+  int size_z = Nz+2*NGHZ;
+//<\EXTERNAL>
+
+//<INTERNAL>
+  real apl;
+  real RH;
+  real Mciso=0.0;
+  real Mesca=0.0;
+  real fcap=0.1;
+  real dx;
+  real dy;
+  real rpl;
+  real temp;
+  int cont = 0;
+  int jmin;
+  int jmax;
+  int i;
+  int j;
+  int k;
+//<\INTERNAL>
+
+//<CONSTANT>
+// real xmin(Nx+1);
+// real ymin(Ny+2*NGHY+1);
+// real zmin(Nz+2*NGHZ+1);
+// real Szj(Ny+2*NGHY);
+// real Szk(Nz+2*NGHZ);
+// real B(1);
+//<\CONSTANT>
+
+//<MAIN_LOOP>
+
+  i = j = k = 0;
+
+  apl = sqrt(xpl[kp]*xpl[kp] + ypl[kp]*ypl[kp] + zpl[kp]*zpl[kp]);
+  RH = apl*pow(mpl[kp]/(3.0*MSTAR),(1.0/3.0));
+  Mesca = 2.0*Rcore[kp]*pow(fcap,-0.5)*MSTAR/apl;
+
+  /***********************FIND THE POSITION OF MAX AND MIN - RADIAL (apl +/- B*RHILL)******************/
+  dx = xmed(1) - xmed(0);
+  dy = ymed(1) - ymed(0);
+
+  #ifdef CARTESIAN/*i -> x, j -> y, k -> z */
+     jmax = (int)(((ypl[kp]+(B/2)*RH)-ymin(0))/dy);
+     jmin = (int)(((ypl[kp]-(B/2)*RH)-ymin(0))/dy);
+  #endif
+
+  #ifdef CYLINDRICAL/*i -> x (azimuthal angle), j -> y (cylindrical radius), k -> z */
+     rpl = sqrt(xpl[kp]*xpl[kp] + ypl[kp]*ypl[kp]); //cylindrical radius 
+     jmax = (int)(((rpl+(B/2)*RH)-ymin(0))/dy);
+     jmin = (int)(((rpl-(B/2)*RH)-ymin(0))/dy);
+  #endif
+
+  #ifdef SPHERICAL/*i -> x (azimuthal angle), j -> y (spherical radius), k -> z (colatitude)*/
+     jmax = (int)(((apl+(B/2)*RH)-ymin(0))/dy);
+     jmin = (int)(((apl-(B/2)*RH)-ymin(0))/dy);
+  #endif 
+
+  //problem with boundary processor, this is a solution
+  if (jmin < 0){ 
+     jmin = 0;
+     size_x = 0;
+     size_z = 0;
+     }
+  if (jmax < 0){
+     jmax = 0;
+     size_x = 0;
+     size_z = 0;
+     }
+  if (jmin > Ny){ 
+     jmin = Ny;
+     size_x = 0;
+     size_z = 0;
+     }
+  if (jmax > Ny){ 
+     jmax = Ny;
+     size_x = 0;
+     size_z = 0;
+     }
+  /**************************************************************************************************/
+
+#ifdef Z
+  for (k=0;k<size_z;k++) {
+#endif
+#ifdef Y
+    for (j=jmin;j<=jmax;j++) {
+#endif
+#ifdef X
+      for (i=0;i<size_x;i++) {
+#endif
+//<#>
+
+           Mciso = Mciso + Sigma[l]*SurfZ(j,k);
+//<\#>
+#ifdef X
+      }
+#endif
+#ifdef Y
+    }
+#endif
+#ifdef Z
+  }
+#endif
+
+  MPI_Allreduce(&Mciso,&temp,1,MPI_DOUBLE,MPI_SUM,MPI_COMM_WORLD);
+  Mciso = temp;
+
+  if ((mpl[kp] < Mciso && mpl[kp] < Mesca)) mpl[kp] = mpl[kp] + accsolids[kp]*dt;
+  else
+     {
+     mpl[kp] = mpl[kp];
+     accsolids[kp] = 0.0;
+     }
+//<\MAIN_LOOP>
+}

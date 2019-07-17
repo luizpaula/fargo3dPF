@@ -1,0 +1,167 @@
+#include "fargo3d.h"
+
+void InitGas(int kp){
+   
+  real* cs = Energy->field_cpu;
+  real* dens = Density->field_cpu;
+  real* Vt = Vx->field_cpu;
+  real* Vr = Vy->field_cpu;
+  real* xplanet  = Sys->x_cpu;
+  real* yplanet  = Sys->y_cpu;
+  real* zplanet  = Sys->z_cpu;
+  real* mplanet  = Sys->mass_cpu;
+  real* vxplanet = Sys->vx;
+  real* vyplanet = Sys->vy;
+  real* accgas = Sys->accgas_cpu;
+  int pitch  = Pitch_cpu;
+  int stride = Stride_cpu;
+  int size_x = Nx+2*NGHX;
+  int size_y = Ny+2*NGHY;
+  int size_z = Nz+2*NGHZ;
+
+  real tauKH;
+  real dMdtKH;
+  real dMdtmax;
+  real dMdt;
+  real b = 8.0;
+  real c = 2.5;
+  real year;
+  real vslocal;
+  real RBondi;
+  real Raij;
+  real dSigmagas;
+  real Trij;
+  real PxPlanet;
+  real PyPlanet;
+  real facc;
+  real mp;
+  real planetdistance;
+  real rroche;
+  real dist;
+  real smoothing;
+  real vxcel;
+  real vycel;
+  real vtcel;
+  real vrcel;
+  real deltaM = 0.0;
+  real deltaMKH = 0.0;
+  real deltaVrel;
+  real dMPlanet = 0.0;
+  real dMPlanetKH = 0.0;
+  real dPxPlanet = 0.0;
+  real dPyPlanet = 0.0;
+  real temp = 0.0;
+  int i;
+  int j;
+  int k;
+
+  i = j = k = 0;
+
+  mp = mplanet[n];
+  planetdistance = sqrt(xplanet[n]*xplanet[n]+yplanet[n]*yplanet[n]+zplanet[n]*zplanet[n]);
+  rroche = planetdistance*(mt[kp]/(3.0*MSTAR),(1.0/3.0));
+
+  /*Kelvin-Helmholtz timescale*/
+  tauKH = pow(10.0,b)*pow(mp/MEARTH,-c);
+  #ifdef MKS
+     year = 31536000.0;
+  #endif
+  #ifdef CGS
+     year = 31536000.0;
+  #endif
+  #if !(defined(MKS) || defined (CGS))
+     year = 31536000.0/(sqrt(R0*R0*R0/G/MSTAR));
+  #endif
+  tauKH = tauKH*year;
+  dMdtKH = mp/tauKH;
+
+  for (k=0; k<size_z; k++) {
+    for (j=0; j<size_y; j++) {
+      for (i=0; i<size_x; i++) {
+
+           #ifdef ISOTHERMAL
+              vslocal = cs[l];
+           #endif
+           #ifdef ADIABATIC
+              vslocal = sqrt(GAMMA * (GAMMA - 1.0) * cs[l]/dens[l]); 
+           #endif
+           #ifdef POLYTROPIC
+              vslocal = sqrt(cs[l]*GAMMA*pow(dens[l],GAMMA-1.0));
+           #endif
+
+	   if (ROCHESMOOTHING != 0)
+	       smoothing = rroche*ROCHESMOOTHING;
+	   else
+	       smoothing = ASPECTRATIO*
+	       pow(planetdistance/R0,FLARINGINDEX)*
+	       planetdistance*THICKNESSSMOOTHING;
+
+            #ifdef CARTESIAN  
+               vxcel = Vt[l];
+               vycel = Vr[l];       
+            #endif
+
+            #ifdef CYLINDRICAL 
+               vtcel = 0.5*(Vt[l] + Vt[lxp])+ ymed(j)*OMEGAFRAME;
+               vrcel = 0.5*(Vr[l] + Vr[lyp]);
+               vxcel = (vrcel*XC - vtcel*YC)/ymed(j);
+               vycel = (vrcel*YC + vtcel*XC)/ymed(j);
+            #endif
+
+            #ifdef SPHERICAL
+               //working
+            #endif
+
+            deltaVrel = sqrt(pow(vxcel - vxplanet[n],2.0) + pow(vycel - vyplanet[n],2.0));
+            RBondi = 2.0*G*mp/(pow(vslocal,2.0) + pow(deltaVrel,2.0));
+
+            Raij = MIN(RBondi,rroche);  
+	    dist =  ((XC-xplanet[n])*(XC-xplanet[n])+
+		    (YC-yplanet[n])*(YC-yplanet[n])+
+		    (ZC-zplanet[n])*(ZC-zplanet[n]));
+            dist = sqrt(dist);
+
+            if (dist < Raij)
+               {
+               Trij = 2.0*PI*sqrt(pow(dist+smoothing,3.0)/(G*mp));
+               facc = dt/Trij;
+               deltaM = facc*dens[l]*SurfZ(j,k);
+               dMPlanet += deltaM;
+               if (AccretionRunaway == YES)
+                  {
+                  if (dens[l] > 1.0e-10)  dens[l] *= (1.0 - facc);
+                  else dens[l] = dens[l];
+                  }
+               else
+                  {
+                  deltaMKH = (1.0 - ratio_KH_max)*dens[l]*SurfZ(j,k);
+                  if (dens[l] > 1.0e-10) dens[l] -= facc*(1.0 - ratio_KH_max)*dens[l];
+                  else dens[l] = dens[l];
+                  }
+                }
+      }
+    }
+  }
+
+  MPI_Allreduce(&dMPlanet,&temp,1,MPI_DOUBLE,MPI_SUM,MPI_COMM_WORLD);
+  dMPlanet = temp;
+
+  MPI_Allreduce(&dMPlanetKH,&temp,1,MPI_DOUBLE,MPI_SUM,MPI_COMM_WORLD);
+  dMPlanetKH = temp;
+
+  dMdtmax = dMPlanet/dt;
+  dMdt = MIN(dMdtKH,dMdtmax);
+
+  if (dMdtKH < dMdtmax)
+     { 
+     accgas[kp] = dMdtKH; 
+     AccretionRunaway = NO;
+     ratio_KH_max = 1.0 - dMdtKH/dMdtmax;
+     }
+  else
+     {
+     accgas[kp] = dMdtmax; 
+     ratio_KH_max = 1.0;
+     AccretionRunaway = YES;
+     }
+}

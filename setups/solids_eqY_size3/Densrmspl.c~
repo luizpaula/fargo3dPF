@@ -1,0 +1,100 @@
+//<FLAGS>
+//#define __GPU
+//#define __NOPROTO
+//<\FLAGS>
+
+//<INCLUDES>
+#include "fargo3d.h"
+//<\INCLUDES>
+
+void Densrmspl_cpu(int kp) {
+
+//<USER_DEFINED>
+  INPUT(Sigmam);
+//<\USER_DEFINED>
+
+//<EXTERNAL>
+  real* Sigma = Sigmam->field_cpu;
+  real* xpl = Sys->x_cpu;
+  real* ypl = Sys->y_cpu;
+  real* zpl = Sys->z_cpu;
+  real* mpl = Sys->mass_cpu;
+  real* denspl = Sys->densrms_cpu;
+  int pitch  = Pitch_cpu;
+  int stride = Stride_cpu;
+  int size_x = Nx+2*NGHX;
+  int size_y = Ny+2*NGHY;
+  int size_z = Nz+2*NGHZ;
+//<\EXTERNAL>
+
+//<INTERNAL>
+  real RH;
+  real apl;
+  real dens_rms = 0.0;
+  real rcell;
+  real temp;
+  int cont = 0;
+  int i;
+  int j;
+  int k;
+//<\INTERNAL>
+
+//<CONSTANT>
+// real xmin(Nx+1);
+// real ymin(Ny+2*NGHY+1);
+// real zmin(Nz+2*NGHZ+1);
+// real B(1);
+//<\CONSTANT>
+
+//<MAIN_LOOP>
+
+  i = j = k = 0;
+
+  apl = sqrt(xpl[kp]*xpl[kp] + ypl[kp]*ypl[kp] + zpl[kp]*zpl[kp]);
+  RH = apl*pow(mpl[kp]/(3.0*MSTAR),(1.0/3.0));
+
+#ifdef Z
+  for (k=0;k<size_z;k++) {
+#endif
+#ifdef Y
+    for (j=0;j<size_y;j++) {
+#endif
+#ifdef X
+      for (i=0;i<size_x;i++) {
+#endif
+//<#>
+      #ifdef CARTESIAN/*i -> x, j -> y, k -> z */
+         rcell = sqrt(ymed(j)*ymed(j) + xmed(i)*xmed(i) + zmed(k)*zmed(k)); 
+      #endif
+
+      #ifdef CYLINDRICAL/*i -> x (azimuthal angle), j -> y (cylindrical radius), k -> z */
+         rcell = sqrt(ymed(j)*ymed(j) + zmed(k)*zmed(k));
+      #endif
+
+      #ifdef SPHERICAL/*i -> x (azimuthal angle), j -> y (spherical radius), k -> z (colatitude)*/
+         rcell = ymed(j);
+      #endif
+
+      if ((rcell < apl + (B/2.0)*RH) && (rcell > apl - (B/2.0)*RH) && (abs(ZC-zpl[kp]) < B*RH))
+         {
+         cont++;
+         dens_rms = dens_rms + Sigma[l];
+         }
+//<\#>
+#ifdef X
+      }
+#endif
+#ifdef Y
+    }
+#endif
+#ifdef Z
+  }
+#endif
+
+  if (cont != 0) dens_rms = dens_rms/cont;
+  else dens_rms = 0.0;
+
+  MPI_Allreduce(&dens_rms,&temp,1,MPI_DOUBLE,MPI_SUM,MPI_COMM_WORLD);
+  dens_rms = temp;
+//<\MAIN_LOOP>
+}

@@ -1,0 +1,191 @@
+#include "fargo3d.h"
+
+void Derivsaccretionsolidsinit(int kp) {
+
+  real* cs = Energy->field_cpu;
+  real* dens = Density->field_cpu;
+  real* denspl = Sys->densrms_cpu;
+  real* xpl = Sys->x_cpu;
+  real* ypl = Sys->y_cpu;
+  real* zpl = Sys->z_cpu;
+  real* mpl = Sys->mass_cpu;
+  real* Mcore = Sys->mcore_cpu;
+  real* Menv = Sys->menv_cpu;
+  real* Mcrit = Sys->mcrit_cpu;
+  real* ecc = Sys->erms_cpu;
+  real* inc = Sys->irms_cpu;
+  real* accsolids = Sys->accsol_cpu;
+  real* Rplanet = Sys->rplanet_cpu;
+  real* Rcore = Sys->rcore_cpu;
+  real* Rcap = Sys->rcap_cpu;
+  int pitch  = Pitch_cpu;
+  int stride = Stride_cpu;
+  int size_x = Nx+2*NGHX;
+  int size_y = Ny+2*NGHY;
+  int size_z = Nz+2*NGHZ;
+
+  real rcell;
+  real RH;
+  real apl;
+  real Porbital;
+  real ecc_red;
+  real inc_red;
+  real Beta;
+  real IFBETA;
+  real IGBETA;
+  real Phigh;
+  real Pmed;
+  real Plow;
+  real Pcoll;
+  real k1 = 1.0;
+  real k2 = 0.25;
+  real year;
+  real vslocal;
+  real temp = 0.0;
+  real rpl;
+  real thetapl;
+  real phipl;
+  real dx;
+  real dy;
+  real dz;
+  int ll;
+  int ipl;
+  int jpl;
+  int kpl = 0;
+  int i;
+  int j;
+  int k;
+  int cont = 0;
+
+  i = j = k = 0;
+
+  apl = sqrt(xpl[kp]*xpl[kp] + ypl[kp]*ypl[kp] + zpl[kp]*zpl[kp]);
+  RH = apl*pow(mpl[kp]/(3.0*MSTAR),(1.0/3.0));
+
+  if (mpl[kp] > 10.0*MEARTH)
+     {
+     Mcore[kp] = 10.0*MEARTH;
+     Menv[kp] = mpl[kp] - Mcore[kp];
+     Mcrit[kp] = 0.5*10.0*MEARTH;
+     accsolids[kp] = 0.0;
+
+     /****WE FIND THE POSITION OF THE CELL THAT CONTAINS THE PLANET****/
+     #ifdef X
+        dx = xmed(1) - xmed(0);
+        #ifdef CARTESIAN/*x -> x*/
+           ipl = (int)((xpl[kp]-xmin(0))/dx);
+        #endif
+        #ifdef CYLINDRICAL/*x -> phi (azimuthal angle)*/
+           thetapl = atan2(ypl[kp],xpl[kp]);
+           ipl = (int)((thetapl-xmin(0))/dx);
+        #endif
+        #ifdef SPHERICAL/*x -> phi (azimuthal angle)*/
+           thetapl = atan2(ypl[kp], xpl[kp]);
+           ipl = (int)((thetapl-xmin(0))/dx);
+        #endif
+     #endif
+
+     #ifdef Y
+        dy = ymed(1) - ymed(0);
+        #ifdef CARTESIAN/*y -> y*/
+           jpl = (int)((ypl[kp]-ymin(0))/dy);
+        #endif
+        #ifdef CYLINDRICAL/*y -> r*/
+           rpl = sqrt(xpl[kp]*xpl[kp] + ypl[kp]*ypl[kp]);
+           jpl = (int)((rpl-ymin(0))/dy);
+        #endif
+        #ifdef SPHERICAL/*y -> r*/
+           rpl = sqrt(xpl[kp]*xpl[kp] + ypl[kp]*ypl[kp] + zpl[kp]*zpl[kp]);
+           jpl = (int)((rpl-ymin(0))/dy);
+        #endif
+      #endif
+
+      #ifdef Z
+         dz = zmed(1) - zmed(0);
+         #ifdef CARTESIAN/*z -> z*/
+            kpl = (int)((zpl[kp]-zmin(0))/dz);
+         #endif
+         #ifdef CYLINDRICAL/*z -> z*/
+            kpl = (int)((zpl[kp]-zmin(0))/dz);
+         #endif
+         #ifdef SPHERICAL/*z -> theta (colatitude)*/
+            phipl = atan2(sqrt(xpl[kp]*xpl[kp] + ypl[kp]*ypl[kp]),zpl[kp]);
+            kpl = (int)((thetapl-xmin(0))/dx);
+         #endif
+      #endif
+      /*****************************************************************/   
+
+      /*WE FOUND THE PHYSICAL VALUES OF THE CELL THAT CONTAINS THE PLANET*/
+      /*Because the mesh division of MPI, only some processors will find the 
+      planet. The IF ensures that the calculation is being performed in the 
+      correct processor.*/
+      if ((jpl > 0) && (jpl < size_y))
+         {
+         /*We obtain the relative position of the cell that contains the planet kp*/
+         #ifndef __GPU
+             ll = ((ipl)+(jpl)*(size_x)+((kpl)*stride));
+         #else //defined __GPU
+             ll =  ((ipl)+((jpl)*pitch)+((kpl)*stride));
+         #endif
+
+         /*we calculate the speed of sound in the cell that contain the planet kp*/
+         #ifdef ISOTHERMAL
+            vslocal = cs[ll];
+         #endif
+         #ifdef ADIABATIC /*vslocal^2 =sqrt(gamma) * (gamma - 1) * e*/
+           vslocal = sqrt(GAMMA * (GAMMA - 1.0) * cs[ll]/dens[ll]); 
+         #endif
+         #ifdef POLYTROPIC
+            vslocal = sqrt(cs[ll]*GAMMA*pow(dens[ll],GAMMA-1.0));
+         #endif 
+         }
+         else
+         {
+         vslocal = 0.0; //absurd value for the processor that not contain the planet kp.
+         }
+
+      /*CARRIES THE VARIABLES FOR ALL PROCESSORS*/
+      /*All processors with absurd values for the variable receives the true value.*/
+      MPI_Allreduce(&vslocal,&temp,1,MPI_DOUBLE,MPI_SUM,MPI_COMM_WORLD);
+      vslocal = temp;
+ 
+      Rcore[kp] = pow(3.0*Mcore[kp]/(4.0*Pi*RHOM),1.0/3.0);
+      Rplanet[kp] = G*mpl[kp]/(vslocal*vslocal/k1 + G*mpl[kp]/(k2*RH));
+      Rcap[kp] = Rcore[kp];
+      }
+   else
+      {
+      Mcore[kp] = mpl[kp];
+      Menv[kp] = 0.0; 
+      Rcore[kp] = pow(3.0*Mcore[kp]/(4.0*Pi*RHOM),1.0/3.0);
+      Rplanet[kp] = Rcore[kp];
+      Rcap[kp] = Rcore[kp];
+
+      /*PERIOD ORBITAL*/ 
+      Porbital = (2.0*Pi)*pow((apl*apl*apl)/(G*(MSTAR+mpl[kp])),0.5);
+
+      /*ECCENTRICITY AND INCLINATION REDUCED (see Fortier et. al., 2012)*/  
+      ecc_red = apl*ecc[kp]/RH;
+      inc_red = apl*inc[kp]/RH;
+
+      /*VALOR OF BETA (see Fortier et. al., 2012)*/ 
+      Beta = inc_red/ecc_red;
+
+      /*IF e IG (Fortier et. al, 2013 - Eq 26 and Eq 27)*/ 
+      IFBETA = (1.0 + 0.95925*Beta + 0.77251*Beta*Beta)/(Beta*(0.13142 + 0.12295*Beta));
+      IGBETA = (1.0 + 0.39996*Beta)/(Beta*(0.0369 + 0.04833*Beta + 0.00687*Beta*Beta));
+
+      /*VALOR FOR PROBABILITIES (Fortier et. al, 2013 - Eq 23, 24 and Eq 27)*/ 
+      Phigh = (pow((Rcap[kp] + RM),2.0)/(2.0*Pi*RH*RH))*(IFBETA + (6.0*RH*IGBETA)/((Rcap[kp] + RM)*ecc_red*ecc_red));
+      Pmed = (pow((Rcap[kp] + RM),2.0)/(4.0*Pi*RH*RH*inc_red))*(17.3 + (232.0*RH)/(Rcap[kp] + RM));
+      Plow = 11.3*pow(((Rcap[kp] + RM)/RH),0.5);
+
+      /*VALOR FOR PCOLL (Fortier et. al, 2013 - Eq 28)*/ 
+      Pcoll = pow(Phigh,-2.0) + pow(Plow,-2.0);//PCOLL (Fortier et. al, 2013 - Eq 28)
+      Pcoll = pow(Pcoll,-0.5);
+      Pcoll = MIN(Pmed,Pcoll);
+
+      if (accsolids[kp] < 0.0) accsolids[kp] = 0.0; //for safe
+      else accsolids[kp] = (2.0*Pi*denspl[kp]*RH*RH/Porbital)*Pcoll;
+      }
+}

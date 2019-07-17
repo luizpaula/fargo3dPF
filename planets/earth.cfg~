@@ -1,0 +1,6 @@
+###########################################################
+#   Planetary system initial configuration
+###########################################################
+
+# Planet Name 	Distance	Mass	 Accretion	Feels Disk	Feels Others
+Earth		1.154   	3.0e-7	 0.0	  	YES		NO

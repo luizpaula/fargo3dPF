@@ -1,0 +1,191 @@
+//<FLAGS>
+//#define __GPU
+//#define __NOPROTO
+//<\FLAGS>
+
+//<INCLUDES>
+#include "fargo3d.h"
+//<\INCLUDES>
+
+void Velply_cpu() {
+  
+//<USER_DEFINED>
+  INPUT(Energy);
+  INPUT(Density);
+  INPUT(Rhogas);
+  INPUT(Reymol);
+  INPUT(Ecc);
+  INPUT(Inc);
+  OUTPUT(Vypl);
+//<\USER_DEFINED>
+
+//<EXTERNAL>
+  real* cs  = Energy->field_cpu;
+  real* dens  = Density->field_cpu;
+  real* rhogas  = Rhogas->field_cpu;
+  real* ecc  = Ecc->field_cpu;
+  real* inc  = Inc->field_cpu;
+  real* reymol  = Reymol->field_cpu;
+  real* vypl = Vypl->field_cpu;
+  int pitch  = Pitch_cpu;
+  int stride = Stride_cpu;
+  int size_x = Nx+2*NGHX;
+  int size_y = Ny+2*NGHY;
+  int size_z = Nz+2*NGHZ;
+//<\EXTERNAL>
+  
+//<INTERNAL>
+  real vs;
+  real vsyp;
+  real p;
+  real q;
+  real dist;
+  real vk;
+  real hg;
+  real nfactor;
+  real nfactoryp;
+  real dp;
+  real dyp;
+  real teps;
+  real tepsyp;
+  real numberH2;
+  real numberH2yp;
+  real lambda;
+  real lambdayp;
+  real tsto;
+  real tstoyp;
+  real vrel;
+  real vrelyp;
+  real tquad;
+  real tquadyp;
+  real Porbital;
+  real seps;
+  real sepsyp;
+  real ssto;
+  real sstoyp;
+  real dadt;
+  real dadtyp;
+  int i;
+  int j;
+  int k;
+//<\INTERNAL>
+
+//<CONSTANT>
+// real xmin(Nx+2*NGHX+1);
+// real ymin(Ny+2*NGHY+1);
+// real zmin(Nz+2*NGHZ+1);
+// real SIGMASLOPE(1);
+// real FLARINGINDEX(1);
+// real ASPECTRATIO(1);
+// real RM(1);
+// real RICE(1);
+// real RHOICE(1);
+// real RHOROCKY(1);
+//<\CONSTANT>
+
+//<MAIN_LOOP>
+
+  i = j = k = 0;
+#ifdef Z
+  for (k=0; k<size_z; k++) {
+#endif
+#ifdef Y
+    for (j=0; j<size_y; j++) {
+#endif
+#ifdef X
+      for (i=0; i<size_x; i++) {
+#endif
+//<#>
+
+#ifdef ISOTHERMAL
+       vs = cs[l];
+       vsyp = cs[lyp]
+#endif
+#ifdef ADIABATIC
+       vs = sqrt(gamma*(gamma-1.0)*cs[l]/dens[l]);
+       vsyp = sqrt(gamma*(gamma-1.0)*cs[lyp]/dens[lyp]); 
+#endif
+#ifdef POLYTROPIC
+       vs = sqrt(cs[l]*gamma*pow(dens[l],gamma-1.0));
+       vsyp = sqrt(cs[lyp]*gamma*pow(dens[lyp],gamma-1.0));
+#endif	
+
+       /*WE CALCULATE nfactor (see Takeuchi 2002 - Eq.17)*/
+#ifdef z
+       p = SIGMASLOPE;
+#else
+       p = (SIGMASLOPE - FLARINGINDEX);
+#endif
+       q = 2.0*FLARINGINDEX - 3.0;
+
+       dist = ymed(j);
+       vk = sqrt(G*MSTAR/sqrt(dist));
+       hg = (ASPECTRATIO*dist)*pow((dist/R0),FLARINGINDEX);
+       nfactor = -pow(hg/dist,2.0)*(p + q + FLARINGINDEX*zmed(k)*zmed(k)/hg);
+
+       dist = ymed(j+1)/2.0;
+       vk = sqrt(G*MSTAR/sqrt(dist));
+       hg = (ASPECTRATIO*dist)*pow((dist/R0),FLARINGINDEX);
+       nfactoryp = -pow(hg/dist,2.0)*(p + q + FLARINGINDEX*zmed(k)*zmed(k)/hg);   
+
+       /*Density of planetesimals*/
+       if (ymed(j) < RICE) dp = RHOICE;  //after line ice
+       else dp = RHOROCKY; //before line ice
+       if (ymed(j+1) < RICE) dpyp = RHOICE;  //after line ice
+       else dpyp = RHOROCKY; //before line ice
+  
+       /*Three stopping time*/
+       teps = (dp*RM)/(rhogas[l]*cs[l]);
+       tepsyp = (dpyp*RM)/(rhogas[lyp]*cs[lyp]);
+
+       numberH2 = (NA/MUH2)*rhogas[l];
+       lambda = (1.0/CSH2)/numberH2;
+       numberH2yp = (NA/MUH2)*rhogas[lyp];
+       lambdayp = (1.0/CSH2)/numberH2yp;
+       tsto = (2.0*dp*RM*RM)/(3.0*rhogas[l]*cs[l]*lambda)
+       tstoyp = (2.0*dpyp*RM*RM)/(3.0*rhogas[lyp]*cs[lyp]*lambdayp)
+
+       vrel = sqrt(G*MSTAR/sqrt(ymed(j)*ymed(j))*sqrt(nfactor*nfactor + 5.0*ecc[l]*ecc[l]/8.0 + 1.0*inc[l]*inc[l]/2.0)
+       vrelyp = sqrt(G*MSTAR/sqrt(ymed(j+1)*ymed(j+1))*sqrt(nfactoryp*nfactoryp + 5.0*ecc[lyp]*ecc[lyp]/8.0 + 1.0*inc[lyp]*inc[lyp]/2.0)
+       tqua = (6.0*dp*RM)/(rhogas[l]*vrel]);
+       tquayp = (6.0*dpyp*RM)/(rhogas[lyp]*vrelyp]);
+
+       /*Factor of three regimes*/
+       Porbital = (2.0*PI)*sqrt((ymed(j)*ymed(j)*ymed(j))/(G*(MSTAR)));
+       seps = (2.0*PI*teps)/Porbital;
+       ssto = (2.0*PI*tsto)/Porbital;
+
+       Porbital = (2.0*PI)*sqrt((ymed(j+1)*ymed(j+1)*ymed(j+1))/(G*(MSTAR)));
+       sepsyp = (2.0*PI*tepsyp)/Porbital;
+       sstoyp = (2.0*PI*tstoyp)/Porbital;
+
+       if((reymol[l] >= 20.0) && (RM >= lambda))
+         {
+         dadt = -(2.0*ymed(j)*nfactor/tquad);
+         dadtyp = -(2.0*ymed(j+1)*nfactoryp/tquadyp);
+         vypl[l] = (dadt + dadtyp)/2.0;
+         }
+       if((reymol[l] < 20.0) && (RM >= lambda))
+         {
+         dadt = -(2.0*ymed(j)*nfactor/tsto)*(ssto*ssto/(1.0 + ssto*ssto));
+         dadtyp = -(2.0*ymed(j+1)*nfactoryp/tstoyp)*(sstoyp*sstoyp/(1.0 + sstoyp*sstoyp));
+         vypl[l] = (dadt + dadtyp)/2.0;
+         }
+       if(RM < lambda)
+         {
+         dadt = -(2.0*ymed(j)*nfactor/teps)*(seps*seps/(1.0 + seps*seps));
+         dadt = -(2.0*ymed(j)*nfactor/tepsyp)*(sepsyp*sepsyp/(1.0 + sepsyp*sepsyp));
+         vypl[l] = (dadt + dadtyp)/2.0;
+         }
+//<\#>
+#ifdef X
+      }
+#endif
+#ifdef Y
+    }
+#endif
+#ifdef Z
+  }
+#endif
+//<\MAIN_LOOP>
+}

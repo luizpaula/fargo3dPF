@@ -1,0 +1,62 @@
+#include "fargo3d.h"
+
+void Ecc_inc_cold_init(){
+
+  int i,j,k;
+  real* Sigma = Density->field_cpu;
+  real* Sigmasol = SigmaM->field_cpu;
+  real* eccpl = Ecc->field_cpu;
+  real* incpl = Inc->field_cpu;
+
+  real rcell;
+  real m;
+  real dp;
+  real Sigmagas;
+  real rhogas;
+    
+  boolean GhostInclude = TRUE;
+  
+  int begin_k =(GhostInclude ? 0 : NGHZ);
+  int end_k = Nz+2*NGHZ-begin_k;
+  int begin_j =(GhostInclude ? 0 : NGHY);
+  int end_j = Ny+2*NGHY-begin_j;
+  int begin_i = (GhostInclude ? 0 : NGHX);
+  int end_i = Nx+2*NGHX-begin_i;
+
+  for (k = begin_k; k<end_k; k++) {
+    for (j = begin_j; j<end_j; j++) {
+      for (i = begin_i; i<end_i; i++) {
+
+          /*RADIAL POSITION OF CELL*/
+          #ifdef CARTESIAN
+             rcell = sqrt(xmed(i)*xmed(i) + ymed(j)*ymed(j) + zmed(k)*zmed(k));
+          #endif
+          #ifdef CYLINDRICAL
+             rcell = ymed(j);
+          #endif
+          #ifdef SPHERICAL
+             rcell = ymed(j);
+          #endif
+
+          /*volumetric density of gas, see Armitage - Planet formation - Eq. 2.9*/ 
+          #ifdef Z
+             rhogas = Sigma[l];
+             Sigmagas = rhogas*dz;
+          #else 
+             Sigmagas = Sigma[l];
+             rhogas = (1.0/sqrt(2.0*Pi)) * (Sigmagas/(ASPECTRATIO*rcell));
+             //FORTIER PARAMETER
+             rhogas = 2.4e-6; //2.4e-9 g/cm3
+             Sigmagas = 743.0;  //743 kg/m2 
+          #endif
+
+        if (rcell < RICE) dp = RHOICE;
+        else dp = RHOROCKY;
+        m = dp*(4.0/3.0)*Pi*pow(RM,3.0);
+
+        eccpl[l] = 2.31*(pow(m,4.0/15.0)*pow(Sigmagas,1.0/5.0)*pow(rcell,1.0/5.0)*pow(RHOM,2.0/15.0))*pow(CD,-1.0/5.0)*pow(rhogas,-1.0/5.0)*pow(MSTAR,-2.0/5.0);
+        incpl[l] = eccpl[l]/2.0;
+      }
+    }
+  }
+}

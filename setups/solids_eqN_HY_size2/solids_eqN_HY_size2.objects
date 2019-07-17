@@ -1,0 +1,43 @@
+MAINOBJ += computerhogas.o
+GPUOBJ += computerhogas_gpu.o
+
+MAINOBJ += computenumol.o
+GPUOBJ += computenumol_gpu.o
+
+MAINOBJ += computereymol.o
+GPUOBJ += computereymol_gpu.o
+
+MAINOBJ += computegasdragecc.o
+GPUOBJ += computegasdragecc_gpu.o
+
+MAINOBJ += computegravecc.o
+GPUOBJ += computegravecc_gpu.o
+
+MAINOBJ += computegravinc.o
+GPUOBJ += computegravinc_gpu.o
+
+MAINOBJ += computegasdraginc.o
+GPUOBJ += computegasdraginc_gpu.o
+
+MAINOBJ += updateecc.o
+GPUOBJ += updateecc_gpu.o
+
+MAINOBJ += updateinc.o
+GPUOBJ += updateinc_gpu.o
+
+MAINOBJ += computeaccretionsolids.o
+GPUOBJ += computeaccretionsolids_gpu.o
+
+MAINOBJ += computeaccretionsolidsequilibrium.o
+GPUOBJ += computeaccretionsolidsequilibrium_gpu.o
+
+MAINOBJ += accretiongas.o
+GPUOBJ += accretiongas_gpu.o
+
+MAINOBJ += initAccSolids.o
+
+MAINOBJ += initAccSolidsEquilibrium.o
+
+
+
+

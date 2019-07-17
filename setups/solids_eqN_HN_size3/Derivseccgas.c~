@@ -1,0 +1,104 @@
+//<FLAGS>
+//#define __GPU
+//#define __NOPROTO
+//<\FLAGS>
+
+//<INCLUDES>
+#include "fargo3d.h"
+//<\INCLUDES>
+
+void Derivseccgas_cpu() {
+
+//<USER_DEFINED>
+  INPUT(Density);
+  INPUT(Inc);
+  INPUT(Ecc);
+  OUTPUT(Ecc);
+//<\USER_DEFINED>
+
+//<EXTERNAL>
+  real* dens = Density->field_cpu;
+  real* ecc = Ecc->field_cpu;
+  real* inc = Inc->field_cpu;
+  int pitch  = Pitch_cpu;
+  int stride = Stride_cpu;
+  int size_x = Nx;
+  int size_y = Ny+2*NGHY;
+  int size_z = Nz+2*NGHZ;
+//<\EXTERNAL>
+
+//<INTERNAL>
+  real vs;
+  real Sigmagas;
+  real rhogas;
+  real dp;
+  real m;
+  real rcell;
+  real lambda;
+  real numberH2;
+  real numol;
+  real Omega;
+  real vk;
+  real nu_mol;
+  real vrel;
+  real Remol;
+  real p;
+  real nfactor;
+  real t_drag;
+  real epsilon=1.211;
+  int i;
+  int j;
+  int k;
+  int ll;
+//<\INTERNAL>
+
+//<CONSTANT>
+// real ymin(Ny+2*NGHY);
+// real RICE(1);
+// real RHOM(1);
+// real B(1);
+// real RM(1);
+// real RHOICE(1);
+// real RHOROCKY(1);
+// real ASPECTRATIO(1);
+// real FLARINGINDEX(1);
+// real SIGMASLOPE(1);
+// real GAMMA(1);
+// real CD(1);
+//<\CONSTANT>
+
+//<MAIN_LOOP>
+
+  i = j = k = 0;
+
+#ifdef Z
+  for (k=0; k<size_z; k++) {
+#endif
+#ifdef Y
+    for (j=0; j<size_y; j++) {
+#endif
+#ifdef X
+      for (i=0; i<size_x; i++) {
+#endif
+//<#>
+      ll = l;
+
+      rhogas = (1./sqrt(2.*Pi))*(dens[ll]/(ASPECTRATIO*ymed(j)));
+      Omega = sqrt(G*MSTAR/(ymed(j)*ymed(j)*ymed(j)));
+      vk = Omega*ymed(j);
+      p = -(SIGMASLOPE - FLARINGINDEX);
+      nfactor = (Pi*(1.0 - 2.0*p)/12800.0)*pow(5.0*(ymed(j)/R0),0.5);
+      t_drag = (8.*RHOM*RM)/(3.*CD*rhogas*vk);
+      ecc[ll] = -(2.0*ecc[ll]*ecc[ll]/t_drag)*sqrt(9.0*nfactor*nfactor/4.0 + 9.0*epsilon*epsilon*ecc[ll]*ecc[ll]/(4.0*Pi) + inc[ll]*inc[ll]/Pi);
+//<\#>
+#ifdef X
+      }
+#endif
+#ifdef Y
+    }
+#endif
+#ifdef Z
+  }
+#endif
+//<\MAIN_LOOP>
+}

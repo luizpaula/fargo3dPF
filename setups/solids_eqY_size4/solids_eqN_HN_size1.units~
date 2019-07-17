@@ -1,0 +1,5 @@
+RICE               *= R0
+RM                 *= R0
+RHOM               *= MSTAR/(R0*R0*R0)
+RHOICE             *= MSTAR/(R0*R0*R0)
+RHOROCKY           *= MSTAR/(R0*R0*R0)

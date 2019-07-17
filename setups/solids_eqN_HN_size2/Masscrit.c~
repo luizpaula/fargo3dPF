@@ -1,0 +1,156 @@
+#include "fargo3d.h"
+
+void Masscrit(int kp) {
+
+  real* cs = Energy->field_cpu;
+  real* dens = Density->field_cpu;
+  real* denspl = Sys->densrms_cpu;
+  real* xpl = Sys->x_cpu;
+  real* ypl = Sys->y_cpu;
+  real* zpl = Sys->z_cpu;
+  real* mpl = Sys->mass_cpu;
+  real* Mcore = Sys->mcore_cpu;
+  real* Menv = Sys->menv_cpu;
+  real* Mcrit = Sys->mcrit_cpu;
+  real* ecc = Sys->erms_cpu;
+  real* inc = Sys->irms_cpu;
+  real* accsolids = Sys->accsol_cpu;
+  real* Rplanet = Sys->rplanet_cpu;
+  real* Rcore = Sys->rcore_cpu;
+  real* Rcap = Sys->rcap_cpu;
+  int pitch  = Pitch_cpu;
+  int stride = Stride_cpu;
+  int size_x = Nx+2*NGHX;
+  int size_y = Ny+2*NGHY;
+  int size_z = Nz+2*NGHZ;
+
+  real rcell;
+  real RH;
+  real apl;
+  real Porbital;
+  real ecc_red;
+  real inc_red;
+  real Beta;
+  real IFBETA;
+  real IGBETA;
+  real Phigh;
+  real Pmed;
+  real Plow;
+  real Pcoll;
+  real k1 = 1.0;
+  real k2 = 0.25;
+  real year;
+  real vslocal;
+  real vsglobal;
+  real rpl;
+  real thetapl;
+  real phipl;
+  real dx;
+  real dy;
+  real dz;
+  int ll;
+  int ipl;
+  int jpl;
+  int kpl = 0;
+  int i;
+  int j;
+  int k;
+  int cont = 0;
+
+  #ifdef MKS
+     year = 31536000.0;
+  #endif
+  #ifdef CGS
+     year = 31536000.0;
+  #endif
+  #if !(defined(MKS) || defined (CGS))
+     year = 31536000.0/(sqrt(R0*R0*R0/G/MSTAR));
+  #endif
+
+  Mcrit[kp] = 10.0*pow(accsolids[kp]/((MEARTH/year)*10.0e-6),0.25)*MEARTH;
+
+  if (Mcore[kp] > Mcrit[kp])
+     {
+     /*WE FIND THE POSITION OF THE CELL THAT CONTAINS THE PLANET*/
+     dx = xmed(1) - xmed(0);
+     dy = ymed(1) - ymed(0); 
+
+     #ifdef CARTESIAN/*i -> x, j -> y, k -> z */
+        ipl = (int)((xpl[kp]-xmin(0))/dx);
+        jpl = (int)((ypl[kp]-ymin(0))/dy);
+        #ifdef Z
+           dz = zmed(1) - zmed(0);
+           kpl = (int)((zpl[kp]-zmin(0))/dz);
+        #endif
+     #endif
+
+     #ifdef CYLINDRICAL/*i -> x(azimuthal angle), j -> y (cylindrical radius), k -> z */
+        rpl = sqrt(xpl[kp]*xpl[kp] + ypl[kp]*ypl[kp]);
+        thetapl = atan2(ypl[kp],xpl[kp]);
+        ipl = (int)((thetapl-xmin(0))/dx);
+        jpl = (int)((rpl-ymin(0))/dy); 
+        #ifdef Z
+           dz = zmed(1) - zmed(0);
+           kpl = (int)((zpl[kp]-zmin(0))/dz);
+        #endif
+     #endif
+
+     #ifdef SPHERICAL/*i -> x (azimuthal angle), j -> y (spherical radius), k -> z (colatitude)*/
+        rpl = sqrt(xpl[kp]*xpl[kp] + ypl[kp]*ypl[kp] + zpl[kp]*zpl[kp]);
+        thetapl = atan2(ypl[kp], xpl[kp]);
+        phipl = atan2(sqrt(xpl[kp]*xpl[kp] + ypl[kp]*ypl[kp]),zpl[kp]);
+        ipl = (int)((thetapl-xmin(0))/dx);
+        jpl = (int)((rpl-ymin(0))/dy);
+        #ifdef Z
+           dz = zmed(1) - zmed(0);
+           kpl = (int)((phipl-zmin(0))/dz);
+        #endif
+      #endif
+
+      /*WE FOUND THE PHYSICAL VALUES OF THE CELL THAT CONTAINS THE PLANET**/
+      /*Because the mesh division of MPI, only some processors will find the planet. The IF ensures that the calculation is being
+      performed in the correct processor. For other processors the value jplanet is negative. In the end we assign absurd value for
+      the variable in the processors that not contain the planet.*/
+      if ((jpl > 0) && (jpl < size_y))
+         {
+         /*We obtain the relative position of the cell that contains the planet kp*/
+         #ifndef __GPU
+            ll = ((ipl)+(jpl)*(size_x)+((kpl)*stride));
+         #else //defined __GPU
+            ll =  ((ipl)+((jpl)*pitch)+((kpl)*stride));
+         #endif
+
+         /*we calculate the speed of sound in the cell that contain the planet kp*/
+         #ifdef ISOTHERMAL
+            vslocal = cs[ll];
+         #endif
+         #ifdef ADIABATIC /*vslocal^2 =sqrt(gamma) * (gamma - 1) * e*/
+            vslocal = sqrt(GAMMA * (GAMMA - 1.0) * cs[ll]/dens[ll]); 
+         #endif
+         #ifdef POLYTROPIC
+            vslocal = sqrt(cs[ll]*gamma*pow(dens[ll],GAMMA-1.0));
+         #endif 
+         }
+      else
+         {
+         vslocal = -1.0e300; //absurd value for the processor that not contain the planet kp.
+         }
+
+      /*CARRIES THE VARIABLES FOR ALL PROCESSORS*/
+      /*All processors with absurd values for the variable receives the true value.*/
+      MPI_Allreduce(&vslocal, &vsglobal, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+
+      Rcore[kp] = pow(3.0*Mcore[kp]/(4.0*3.1415*RHOM),1.0/3.0);
+      Rplanet[kp] = G*mpl[kp]/(vsglobal*vsglobal/k1 + G*mpl[kp]/(k2*RH));
+      Rcap[kp] = Rplanet[kp];
+      }
+   else
+      {
+      Mcore[kp] = mpl[kp];
+      Menv[kp] = 0.0; 
+      mpl[kp] = Mcore[kp];
+      Rcore[kp] = pow(3.0*Mcore[kp]/(4.0*3.1415*RHOM),1.0/3.0);
+      Rplanet[kp] = Rcore[kp];
+      Rcap[kp] = Rcore[kp];
+      }
+}

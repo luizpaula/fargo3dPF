@@ -1,0 +1,225 @@
+//<FLAGS>
+//#define __GPU
+//#define __NOPROTO
+//<\FLAGS>
+
+//<INCLUDES>
+#include "fargo3d.h"
+//<\INCLUDES>
+
+void Computeaccretionsolids_cpu(real dt, int kp) {
+
+//<USER_DEFINED>
+  INPUT(Sigmam);
+  OUTPUT(Sigmam);
+//<\USER_DEFINED>
+
+//<EXTERNAL>
+  real* sigmam = Sigmam->field_cpu;
+  real* x = Sys->x_cpu;
+  real* y = Sys->y_cpu;
+  real* z = Sys->z_cpu;
+  real* m = Sys->mass_cpu;
+  real* mcore = Sys->masscore_cpu;
+  real* sigmarms = Sys->sigmarms_cpu;
+  real* eccrms = Sys->eccrms_cpu;
+  real* incrms = Sys->incrms_cpu;
+  real* rcore = Sys->rcore_cpu;
+  real* accsolids = Sys->accsolids_cpu;
+  real* masscrit = Sys->masscrit_cpu;
+  real* massenv  = Sys->massenv_cpu;
+  int pitch  = Pitch_cpu;
+  int stride = Stride_cpu;
+  int size_x = Nx+2*NGHX;
+  int size_y = Ny+2*NGHY;
+  int size_z = Nz+2*NGHZ; 
+//<\EXTERNAL>
+
+//<INTERNAL>
+  real delta;
+  real rpl;
+  real RHpl;
+  real dMdA;
+  int i;
+  int j;
+  int k;
+//<\INTERNAL>
+
+//<CONSTANT>
+// real xmin(Nx+2*NGHX+1);
+// real ymin(Ny+2*NGHY+1);
+// real zmin(Nz+2*NGHZ+1);
+// real B(1);
+//<\CONSTANT>
+
+//<MAIN_LOOP>
+
+  i = j = k = 0;
+
+#ifdef Z
+  for (k=0; k<size_z; k++) {
+#endif
+#ifdef Y
+    for (j=0; j<size_y; j++) {
+#endif
+#ifdef X
+      for (i=0; i<size_x; i++) {
+#endif
+//<#>
+           rpl =  sqrt(x[kp]*x[kp] + y[kp]*y[kp] + z[kp]*z[kp]);
+           RHpl = rpl*pow(m[kp]/(3.0*MSTAR),(1.0/3.0));
+
+#ifdef SPHERICAL
+           delta =  ymed(j)*sin(zmed(k)) - rpl;
+#endif
+#ifdef CYLINDRICAL
+           delta =  ymed(j) - rpl;
+#endif
+#ifdef CARTESIAN
+           delta =  sqrt(XC*XC+YC*YC) - rpl;
+#endif
+
+           if (delta < 0) delta = (-1.0)*delta;
+
+           if (delta < (B/2.0)*RHpl)
+              {
+              dMdA = accsolids[kp]*dt/(2.0*PI*rpl*B*RHpl);
+              sigmam[l] = sigmam[l] - dMdA;
+              if (sigmam[l] < 0.0) sigmam[l] = 0.0;
+              }
+//<\#>
+#ifdef X
+      }
+#endif
+#ifdef Y
+    }
+#endif
+#ifdef Z
+  }
+#endif
+//<\MAIN_LOOP>
+
+//<LAST_BLOCK>
+
+#ifdef __GPU
+  real* x = Sys->x_cpu;
+  real* y = Sys->y_cpu;
+  real* z = Sys->z_cpu;
+  real* m = Sys->mass_cpu;
+  real* mcore = Sys->masscore_cpu;
+  real* sigmarms = Sys->sigmarms_cpu;
+  real* eccrms = Sys->eccrms_cpu;
+  real* incrms = Sys->incrms_cpu;
+  real* rcore = Sys->rcore_cpu;
+  real* accsolids = Sys->accsolids_cpu;
+  real* masscrit = Sys->masscrit_cpu;
+  real* massenv  = Sys->massenv_cpu;
+#endif
+
+  real year;
+  real rcy;
+  real dy;
+  real temp = 0.0;
+  int index;
+  real r;
+  real RH;
+  real Porbital;
+  real ecc_red, inc_red;
+  real Beta;
+  real IFBETA;
+  real IGBETA;
+  real Phigh;
+  real Pmed;
+  real Plow;
+  real Pcoll;
+  real Mesc;
+  real fcap = 0.1;
+
+  #ifdef MKS
+     year = 31536000.0;
+  #endif
+  #ifdef CGS
+     year = 31536000.0;
+  #endif
+  #if !(defined(MKS) || defined (CGS))
+     year = 31536000.0/(2*PI*sqrt(R0_MKS*R0_MKS*R0_MKS/G_MKS/MSTAR_MKS));
+  #endif
+
+  r = sqrt(x[kp]*x[kp] + y[kp]*y[kp] + z[kp]*z[kp]);
+  RH = r*pow(mcore[kp]/(3.0*MSTAR),(1.0/3.0));
+
+  #ifdef Y
+     dy = Ymin(1) - Ymin(0);
+     #ifdef CARTESIAN/*y -> y*/
+        index = (int)((y[kp]-Ymin(0))/dy);
+     #endif
+     #ifdef CYLINDRICAL/*y -> r*/
+        rcy = sqrt(x[kp]*x[kp] + y[kp]*y[kp]);
+        index = (int)((rcy-Ymin(0))/dy);
+     #endif
+     #ifdef SPHERICAL/*y -> r*/
+        index = (int)((r-Ymin(0))/dy);
+     #endif
+  #endif
+
+  #ifndef __GPU
+  //for MPI situation - subgrids
+  if (index < 0) index = 0;
+  if (index > Ny) index = Ny;
+  #endif
+
+  if ((index != 0) && ((index != Ny))) 
+     {
+     sigmarms[kp]  = reduction_full_SUM(Sigmam,index,index+1,NGHZ,Nz+NGHZ);
+     sigmarms[kp] = sigmarms[kp]/NX;
+     }
+  else 
+     {
+     sigmarms[kp] = 0.0;
+     }
+
+  #ifndef __GPU
+    MPI_Allreduce(&sigmarms[kp],&temp,1,MPI_DOUBLE,MPI_SUM,MPI_COMM_WORLD);   
+    sigmarms[kp] = temp;
+  #endif
+
+  /*RADIUS OF CORE*/ 
+  rcore[kp] = pow(3.0*mcore[kp]/(4.0*PI*RHOM),1.0/3.0); 
+
+  /*PERIOD ORBITAL*/ 
+  Porbital = (2.0*PI)*pow((r*r*r)/(G*(MSTAR+mcore[kp])),0.5);
+
+  /*ECCENTRICITY AND INCLINATION REDUCED (see Fortier et. al., 2012)*/  
+  ecc_red = r*eccrms[kp]/RH;
+  inc_red = r*incrms[kp]/RH;
+
+  /*VALOR OF BETA (see Fortier et. al., 2012)*/ 
+  Beta = inc_red/ecc_red;
+
+  /*IF e IG (Fortier et. al, 2013 - Eq 26 and Eq 27)*/ 
+  IFBETA = (1.0 + 0.95925*Beta + 0.77251*Beta*Beta)/(Beta*(0.13142 + 0.12295*Beta));
+  IGBETA = (1.0 + 0.39996*Beta)/(Beta*(0.0369 + 0.04833*Beta + 0.00687*Beta*Beta));
+
+  /*VALOR FOR PROBABILITIES (Fortier et. al, 2013 - Eq 23, 24 and Eq 27)*/ 
+  Phigh = (pow((rcore[kp] + RM),2.0)/(2.0*PI*RH*RH))*(IFBETA + (6.0*RH*IGBETA)/((rcore[kp] + RM)*ecc_red*ecc_red));
+  Pmed = (pow((rcore[kp] + RM),2.0)/(4.0*PI*RH*RH*inc_red))*(17.3 + (232.0*RH)/(rcore[kp] + RM));
+  Plow = 11.3*pow(((rcore[kp] + RM)/RH),0.5); 
+
+  /*VALOR FOR PCOLL (Fortier et. al, 2013 - Eq 28)*/ 
+  Pcoll = pow(Phigh,-2.0) + pow(Plow,-2.0);//PCOLL (Fortier et. al, 2013 - Eq 28)
+  Pcoll = pow(Pcoll,-0.5);
+  Pcoll = MIN(Pmed,Pcoll);
+
+  accsolids[kp] = (2.0*PI*sigmarms[kp]*RH*RH/Porbital)*Pcoll;
+  if (accsolids[kp] < 0.0) accsolids[kp] = 0.0; //for safe
+
+  Mesc = (2.0*MSTAR*rcore[kp])/(sqrt(fcap)*r);
+  if (mcore[kp] > Mesc) accsolids[kp] = 0.0; //scattering
+
+  mcore[kp] = mcore[kp] + accsolids[kp]*dt;
+  m[kp] = m[kp] + accsolids[kp]*dt;
+
+  if (massenv[kp] == 0.0) masscrit[kp] = 10.0*pow(accsolids[kp]/((MEARTH/year)*10.0e-6),0.25)*MEARTH;
+  else masscrit[kp] = masscrit[kp];
+//<\LAST_BLOCK>
+}

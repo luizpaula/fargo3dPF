@@ -1,0 +1,138 @@
+#include "fargo3d.h"
+
+void Eccincequilibriuminit(int kp)
+{
+  real* dens = Density->field_cpu;
+  real* xpl = Sys->x_cpu;
+  real* ypl = Sys->y_cpu;
+  real* zpl = Sys->z_cpu;
+  real* mpl = Sys->mass_cpu;
+  real* ecc = Sys->erms_cpu;
+  real* inc = Sys->irms_cpu;
+  int pitch  = Pitch_cpu;
+  int stride = Stride_cpu;
+  int size_x = Nx+2*NGHX;
+  int size_y = Ny+2*NGHY;
+  
+  real dp;
+  real m;
+  real apl;
+  real rcell;
+  real rhogaslocal;
+  real rhogasglobal;
+
+  real rpl;
+  real thetapl;
+  real phipl;
+  real dx;
+  real dy; 
+  real dz;
+  int ipl = 0;
+  int jpl = 0;
+  int kpl = 0;
+  int ll; 
+
+  /****WE FIND THE POSITION OF THE CELL THAT CONTAINS THE PLANET****/
+  #ifdef X
+     dx = xmed(1) - xmed(0);
+     #ifdef CARTESIAN/*x -> x*/
+        ipl = (int)((xpl[kp]-xmin(0))/dx);
+     #endif
+     #ifdef CYLINDRICAL/*x -> phi (azimuthal angle)*/
+        thetapl = atan2(ypl[kp],xpl[kp]);
+        ipl = (int)((thetapl-xmin(0))/dx);
+     #endif
+     #ifdef SPHERICAL/*x -> phi (azimuthal angle)*/
+        thetapl = atan2(ypl[kp], xpl[kp]);
+        ipl = (int)((thetapl-xmin(0))/dx);
+     #endif
+  #endif
+
+  #ifdef Y
+     dy = ymed(1) - ymed(0);
+     #ifdef CARTESIAN/*y -> y*/
+        jpl = (int)((ypl[kp]-ymin(0))/dy);
+     #endif
+     #ifdef CYLINDRICAL/*y -> r*/
+        rpl = sqrt(xpl[kp]*xpl[kp] + ypl[kp]*ypl[kp]);
+        jpl = (int)((rpl-ymin(0))/dy);
+     #endif
+     #ifdef SPHERICAL/*y -> r*/
+        rpl = sqrt(xpl[kp]*xpl[kp] + ypl[kp]*ypl[kp] + zpl[kp]*zpl[kp]);
+        jpl = (int)((rpl-ymin(0))/dy);
+     #endif
+  #endif
+
+  #ifdef Z
+     dz = zmed(1) - zmed(0);
+     #ifdef CARTESIAN/*z -> z*/
+        kpl = (int)((zpl[kp]-zmin(0))/dz);
+     #endif
+     #ifdef CYLINDRICAL/*z -> z*/
+        kpl = (int)((zpl[kp]-zmin(0))/dz);
+     #endif
+     #ifdef SPHERICAL/*z -> theta (colatitude)*/
+        phipl = atan2(sqrt(xpl[kp]*xpl[kp] + ypl[kp]*ypl[kp]),zpl[kp]);
+        kpl = (int)((thetapl-xmin(0))/dx);
+     #endif
+  #endif
+  /*****************************************************************/    
+
+  /********************POSITION OF THE PLANET***********************/
+  apl = sqrt(xpl[kp]*xpl[kp] + ypl[kp]*ypl[kp] + zpl[kp]*zpl[kp]);
+  /*****************************************************************/     
+
+  /*WE FOUND THE PHYSICAL VALUES OF THE CELL THAT CONTAINS THE PLANET*/
+  /*Because the mesh division of MPI, only some processors will find the 
+  planet. The IF ensures that the calculation is being performed in the 
+  correct processor.*/
+  if ((jpl > 0) && (jpl <= size_y))
+     {     
+     /*We obtain the relative position of the cell that contains the 
+     planet kp*/
+     #ifndef __GPU
+        ll = ((ipl)+(jpl)*(size_x)+((kpl)*stride));
+     #else //defined __GPU
+        ll =  ((ipl)+((jpl)*pitch)+((kpl)*stride));
+     #endif
+    
+     /*Radial position of cell that contain the planet*/
+     #ifdef CARTESIAN
+        rcell = sqrt(xmed(ipl)*xmed(ipl) + ymed(jpl)*ymed(jpl) + zmed(kpl)*zmed(kpl));
+     #endif
+     #ifdef CYLINDRICAL
+        rcell = ymed(jpl);
+     #endif
+     #ifdef SPHERICAL
+        rcell = ymed(jpl);
+     #endif
+
+     /*Volumetric density of gas in the cell that contain the planet -- ARMITAGE - 
+     PLANET FORMATION - EQ. 2.9*/ 
+     #ifdef Z
+        rhogaslocal = dens[ll];
+     #else 
+        rhogaslocal = (1.0/sqrt(2.0*Pi))*(dens[ll]/(ASPECTRATIO*rcell));
+     #endif  
+     }
+  else
+     {
+     rhogaslocal = 0.0; /*value for the processor that not contain the 
+     planet kp.*/ 
+     }
+
+  /*CARRIES THE VARIABLES FOR ALL PROCESSORS*/
+  MPI_Allreduce(&rhogaslocal,&rhogasglobal,1,MPI_DOUBLE,MPI_SUM,MPI_COMM_WORLD);
+
+  /*WE CALCULATE THE MASS OF THE PLANETESIMAl**/ 
+  if (apl < RICE) dp = RHOICE; //after line ice
+  else dp = RHOROCKY; //before line ice
+  m = dp*(4.0/3.0)*Pi*pow(RM,3.0);
+
+  /*WE CALCULATE THE ECCENTRICITY AND INCLINATION RMS OF THE PLANETESIMAlS 
+  (see Fortier e.t al. 2012 - Eq. 56 and 57*/ 
+  ecc[kp] = 1.7*(pow(m,1.0/15.0)*pow(mpl[kp],1.0/3.0)*pow(RHOM,2.0/15.0))
+             *pow(B,-1.0/5.0)*pow(CD,-1.0/5.0)*pow(rhogasglobal,-1.0/5.0)
+             *pow(MSTAR,-1.0/3.0)*pow(apl,-1.0/5.0);
+  inc[kp] = ecc[kp]/2.0;
+}

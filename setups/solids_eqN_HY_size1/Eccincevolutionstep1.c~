@@ -1,0 +1,263 @@
+//<FLAGS>
+//#define __GPU
+//#define __NOPROTO
+//<\FLAGS>
+
+//<INCLUDES>
+#include "fargo3d.h"
+//<\INCLUDES>
+
+void Derivseccincgas_cpu(){
+
+//<USER_DEFINED>
+  INPUT(Density);
+  INPUT(Energy);
+  INPUT(Ecc);
+  INPUT(Inc);
+  OUTPUT(Dedt);
+  OUTPUT(Didt);
+//<\USER_DEFINED>
+
+//<EXTERNAL>
+  real* dens = Density->field_cpu;
+  real* cs   = Energy->field_cpu;
+  real* ecc = Ecc->field_cpu;
+  real* inc = Inc->field_cpu;
+  real* dedt = Dedt->field_cpu;
+  real* didt = Didt->field_cpu;
+  int Nbpl = Sys->nb;
+  int pitch  = Pitch_cpu;
+  int stride = Stride_cpu;
+  int size_x = Nx+2*NGHX;
+  int size_y = Ny+2*NGHY;
+  int size_z = Nz+2*NGHZ;
+//<\EXTERNAL>
+
+//<INTERNAL>
+  int kp;
+  real vs;
+  real Sigmagas;
+  real rhogas;
+  real dp;
+  real m;
+  real rcell;
+  real lambda;
+  real numberH2;
+  real numol;
+  real Omega;
+  real vk;
+  real nu_mol;
+  real vrel;
+  real Remol;
+  real p;
+  real nfactor;
+  real t_drag;
+  real epsilon=1.211;
+  real ecc_red;
+  real inc_red;
+  real Beta;
+  real IPVS;
+  real IQVS;
+  real Lambda;
+  real PVS;
+  real QVS;
+  real RH;
+  real f_delta;
+  real delta;
+  real Porbital;
+  real ecc1;
+  real inc1;
+  real stirring_e = 0.0;
+  real stirring_i = 0.0;
+  real dedt = 0.0;
+  real didt = 0.0;
+  real dx;
+  real dy;
+  real rpl;
+  int i;
+  int j;
+  int k;
+  int ll;
+//<\INTERNAL>
+
+//<CONSTANT>
+// real xmin(Nx+1);
+// real ymin(Ny+2*NGHY+1);
+// real zmin(Nz+2*NGHZ+1);
+// real RICE(1);
+// real RHOM(1);
+// real B(1);
+// real RM(1);
+// real RHOICE(1);
+// real RHOROCKY(1);
+// real ASPECTRATIO(1);
+// real FLARINGINDEX(1);
+// real SIGMASLOPE(1);
+// real GAMMA(1);
+// real CD(1);
+//<\CONSTANT>
+
+//<MAIN_LOOP>
+
+  i = j = k = 0;
+
+#ifdef Z
+  for (k=0;k<size_z;k++) {
+#endif
+#ifdef Y
+    for (j=0;j<size_y;j++) {
+#endif
+#ifdef X
+      for (i=0;i<size_x;i++) {
+#endif
+//<#>
+      ll = l;
+
+      /*RADIAL POSITION OF CELL*/
+      #ifdef CARTESIAN
+         rcell = sqrt(xmed(i)*xmed(i) + ymed(j)*ymed(j) + zmed(k)*zmed(k));
+      #endif
+      #ifdef CYLINDRICAL
+         rcell = ymed(j);
+      #endif
+      #ifdef SPHERICAL
+         rcell = ymed(j);
+      #endif
+
+      /*SPEED OF SOUND IN THE CELL*/
+      #ifdef ISOTHERMAL
+         vs = cs[ll];
+      #endif
+      #ifdef ADIABATIC /*vslocal^2 =sqrt(GAMMA) * (GAMMA - 1) * e*/
+         vs = sqrt(GAMMA * (GAMMA - 1.0) * cs[ll]/dens[ll]); 
+      #endif
+      #ifdef POLYTROPIC /*vslocal^2 = c * GAMMA * rho^(GAMMA - 1)*/
+         vs = sqrt(cs[ll]*GAMMA*pow(dens[ll],GAMMA-1.0));
+      #endif	
+
+      /*VOLUMETRIC DENSITY OF GAS IN THE CELL, see Armitage - Planet formation - Eq. 2.9*/ 
+      #ifdef Z
+         rhogas = dens[ll];
+         dz = zmed(1) - zmed(0);
+         Sigmagas = rhogaslocal*dz;
+      #else 
+         Sigmagas = dens[ll];
+         rhogas = (1.0/sqrt(2.0*Pi))*(dens[ll]/(ASPECTRATIO*rcell));
+      #endif
+
+      /*ANGULAR VELOCITY AND VELOCITY KEPLERIAN*/
+      Omega = sqrt(G*MSTAR/rcell/rcell/rcell);
+      vk = Omega*rcell;
+
+      /*MEAN FREE PATH (see Fortier et. al., 2012 - Eq.33)*/
+      /*NA (number Avogrado), MUH2 (molecular mass of H2), CSH2 (cross section of H2) are defined in fondam.h*/
+      numberH2 = rhogas*NA/MUH2;
+      lambda = 1.0/(numberH2*CSH2);
+ 
+      /*MOLECULAR VISCOSITY (see Fortier et. al. 2012)*/
+      nu_mol = (lambda*vs)/3.0;
+
+      /*PLANETESIMAL VELOCITY RELATIVE TO THE LOCAL CIRCULAR ORBITA
+      WITH i = 0 (see Fortier et. al. 2012 - Eq 30 and text)*/
+      vrel = vk*sqrt((5.0/8.0)*ecc[ll]*ecc[ll] + (1.0/2.0)*inc[ll]*inc[ll]);
+      Remol = vrel*RM/nu_mol;
+
+      /*MASS OF THE PLANETESIMALS*/ 
+      if (rcell < RICE) dp = RHOICE;  //after line ice
+      else dp = RHOROCKY; //before line ice
+      m = dp*(4.0/3.0)*Pi*pow(RM,3.0);
+
+      if (RM >= lambda)
+         {
+         if (Remol >= 20.0)
+            {
+            /*WE CALCULATE nfactor (see Takeuchi 2002 - Eq.17)*/ 
+            p = -(SIGMASLOPE - FLARINGINDEX);
+
+            //nfactor = (Pi*(1.0 - 2.0*p)/12800.0)*pow(5.2*rcell/R0,0.5);
+            nfactor = (Pi*(1.0 - 2.0*p)/12800.0)*pow(5.2*apl/R0,0.5);
+
+            /*WE CALCULATE nfactor AND t_drag (see Fortier et. al., 2012 - Eq.37 and 37)*/ 
+            t_drag = (8.0*RHOM*RM)/(3.0*CD*rhogas*vk);
+
+            /*METHOD EULER SEMI IMPLICIT QUADRATIC REGIME*/
+
+            /*OBTAIN dedt FOR ecc0 and inc0*/
+            /*EFFECT OF NEBULAR GAS DRAG*/
+            dedt[ll] = -(2.0*ecc[ll]*ecc[ll]/t_drag)*sqrt(9.0*nfactor*nfactor/4.0 + 9.0*epsilon*epsilon*ecc0*ecc0/(4.0*Pi) + inc0*inc0/Pi);
+
+            /*OBTAIN didt FOR THE NEW ecc1 and OLD inc0*/
+            didt = -(inc0*inc0/(t_drag))*sqrt(nfactor*nfactor + epsilon*epsilon*ecc1*ecc1/Pi + 4.0*inc0*inc0/Pi);
+                
+            /*OBTAIN INC - EQUATIONS ARE e^2 AND i^2*/
+            didt = didt/(2.0*inc0);
+
+            /*OBTAIN THE NEW INC*/
+            inc1 = inc0 + didt*dt; 
+            }
+         else
+            {
+            /*METHOD EULER SEMI IMPLICIT STOKE REGIME*/
+
+            /*OBTAIN dedt FOR ecc0 and inc0*/
+            /*EFFECT OF NEBULAR GAS DRAG*/
+            dedt = -(3.0/2.0)*(lambda*vs*rhogas*ecc0*ecc0/(RHOM*RM*RM));
+               
+            /*OBTAIN ECC - EQUATIONS IS e^2*/
+            dedt = dedt/(2.0*ecc0);
+
+            /*OBTAIN THE NEW ECC*/
+            ecc1 = ecc0 + dedt*dt;
+
+            /*OBTAIN didt FOR THE NEW ecc1 and inc0*/
+            didt = -(3.0/4.0)*(lambda*vs*rhogas*inc0*inc0/(RHOM*RM*RM));
+
+            /*OBTAIN INC - EQUATIONS ARE e^2 AND i^2*/
+            didt = didt/(2.0*inc0);
+
+            /*OBTAIN THE NEW INC*/
+            inc1 = inc0 + didt*dt;     
+            }
+         }
+      else
+         {
+         /*METHOD EULER SEMI IMPLICIT FOR EPSTEIN REGIME*/
+
+         /*OBTAIN dedt FOR ecc0 and inc0*/
+         /*EFFECT OF NEBULAR GAS DRAG*/
+         dedt = -(ecc0*ecc0)*(vs*rhogas/(RHOM*RM));
+
+         /*OBTAIN ECC AND INC - EQUATIONS ARE e^2 AND i^2*/
+         dedt = dedt/(2.0*ecc0);
+
+         /*OBTAIN THE NEW ECC*/
+         ecc1 = ecc0 + dedt*dt;
+
+         /*OBTAIN dedt FOR THE NEW ecc1 and inc0*/
+         didt = -(inc0*inc0/2.0)*(vs*rhogas/(RHOM*RM));
+
+         /*OBTAIN INC - EQUATIONS ARE e^2 AND i^2*/
+         didt = didt/(2.0*inc0);
+
+         /*OBTAIN THE NEW INC*/
+         inc1 = inc0 + didt*dt; 
+         } 
+
+      eccpl[ll] = ecc1;
+      incpl[ll] = inc1; 
+//<\#>
+#ifdef X
+      }
+#endif
+#ifdef Y
+    }
+#endif
+#ifdef Z
+  }
+#endif
+//<\MAIN_LOOP>
+
+//<LAST_BLOCK>
+
+//<\LAST_BLOCK>
+}

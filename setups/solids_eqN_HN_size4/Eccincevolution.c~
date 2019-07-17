@@ -1,0 +1,537 @@
+//<FLAGS>
+//#define __GPU
+//#define __NOPROTO
+//<\FLAGS>
+
+//<INCLUDES>
+#include "fargo3d.h"
+//<\INCLUDES>
+
+void Eccincevolution_cpu(real dt) {
+
+//<USER_DEFINED>
+  INPUT(Density);
+  INPUT(Energy);
+  INPUT(Ecc);
+  INPUT(Inc);
+  OUTPUT(Ecc);
+  OUTPUT(Inc);
+//<\USER_DEFINED>
+
+//<EXTERNAL>
+  real* dens = Density->field_cpu;
+  real* cs   = Energy->field_cpu;
+  real* eccpl = Ecc->field_cpu;
+  real* incpl = Inc->field_cpu;
+  real* xpl = Sys->x_cpu;
+  real* ypl = Sys->y_cpu;
+  real* zpl = Sys->z_cpu;
+  real* mpl = Sys->mass_cpu;
+  int Nbpl = Sys->nb;
+  int pitch  = Pitch_cpu;
+  int stride = Stride_cpu;
+  int size_x = Nx+2*NGHX;
+  int size_y = Ny+2*NGHY;
+  int size_z = Nz+2*NGHZ;
+//<\EXTERNAL>
+
+//<INTERNAL>
+  int kp;
+  real vs;
+  real Sigmagas;
+  real rhogas;
+  real apl;
+  real dp;
+  real m;
+  real rcell;
+  real lambda;
+  real numberH2;
+  real numol;
+  real Omega;
+  real vk;
+  real nu_mol;
+  real vrel;
+  real Remol;
+  real p;
+  real nfactor;
+  real t_drag;
+  real epsilon=1.211;
+  real ecc_red;
+  real inc_red;
+  real Beta;
+  real IPVS;
+  real IQVS;
+  real Lambda;
+  real PVS;
+  real QVS;
+  real RH;
+  real f_delta;
+  real delta;
+  real Porbital;
+  real ecc0;
+  real inc0;
+  real ecc1;
+  real inc1;
+  real stirring_e = 0.0;
+  real stirring_i = 0.0;
+  real dedt = 0.0;
+  real didt = 0.0;
+  real dx;
+  real dy;
+  real rpl;
+  int i;
+  int j;
+  int k;
+  int ll;
+//<\INTERNAL>
+
+//<CONSTANT>
+// real xmin(Nx+2*NGHY+1);
+// real ymin(Ny+2*NGHY+1);
+// real zmin(Nz+2*NGHZ+1);
+// real RICE(1);
+// real RHOM(1);
+// real B(1);
+// real RM(1);
+// real RHOICE(1);
+// real RHOROCKY(1);
+// real ASPECTRATIO(1);
+// real FLARINGINDEX(1);
+// real SIGMASLOPE(1);
+// real GAMMA(1);
+// real CD(1);
+//<\CONSTANT>
+
+//<MAIN_LOOP>
+
+  i = j = k = 0;
+
+#ifdef Z
+  for (k=0;k<size_z;k++) {
+#endif
+#ifdef Y
+    for (j=0;j<size_y;j++) {
+#endif
+#ifdef X
+      for (i=0;i<size_x;i++) {
+#endif
+//<#>
+      ll = l;
+
+      ecc0 = eccpl[ll];
+      inc0 = incpl[ll];
+
+      /*RADIAL POSITION OF CELL*/
+      #ifdef CARTESIAN
+         rcell = sqrt(xmed(i)*xmed(i) + ymed(j)*ymed(j) + zmed(k)*zmed(k));
+      #endif
+      #ifdef CYLINDRICAL
+         rcell = ymed(j);
+      #endif
+      #ifdef SPHERICAL
+         rcell = ymed(j);
+      #endif
+
+      /*SPEED OF SOUND IN THE CELL*/
+      #ifdef ISOTHERMAL
+         vs = cs[ll];
+      #endif
+      #ifdef ADIABATIC /*vslocal^2 =sqrt(GAMMA) * (GAMMA - 1) * e*/
+         vs = sqrt(GAMMA * (GAMMA - 1.0) * cs[ll]/dens[ll]); 
+      #endif
+      #ifdef POLYTROPIC /*vslocal^2 = c * GAMMA * rho^(GAMMA - 1)*/
+         vs = sqrt(cs[ll]*GAMMA*pow(dens[ll],GAMMA-1.0));
+      #endif	
+
+      /*VOLUMETRIC DENSITY OF GAS IN THE CELL, see Armitage - Planet formation - Eq. 2.9*/ 
+      #ifdef Z
+         rhogas = dens[ll];
+         dz = zmed(1) - zmed(0);
+         Sigmagas = rhogaslocal*dz;
+      #else 
+         Sigmagas = dens[ll];
+         rhogas = (1.0/sqrt(2.0*Pi))*(dens[ll]/(ASPECTRATIO*rcell));
+      #endif
+
+      /*ANGULAR VELOCITY AND VELOCITY KEPLERIAN*/
+      Omega = sqrt(G*MSTAR/rcell/rcell/rcell);
+      vk = Omega*rcell;
+
+      /*MEAN FREE PATH (see Fortier et. al., 2012 - Eq.33)*/
+      /*NA (number Avogrado), MUH2 (molecular mass of H2), CSH2 (cross section of H2) are defined in fondam.h*/
+      numberH2 = rhogas*NA/MUH2;
+      lambda = 1.0/(numberH2*CSH2);
+ 
+      /*MOLECULAR VISCOSITY (see Fortier et. al. 2012)*/
+      nu_mol = (lambda*vs)/3.0;
+
+      /*PLANETESIMAL VELOCITY RELATIVE TO THE LOCAL CIRCULAR ORBITA
+      WITH i = 0 (see Fortier et. al. 2012 - Eq 30 and text)*/
+      vrel = vk*sqrt((5.0/8.0)*eccpl[ll]*eccpl[ll] + (1.0/2.0)*incpl[ll]*incpl[ll]);
+      Remol = vrel*RM/nu_mol;
+
+      /*MASS OF THE PLANETESIMALS*/ 
+      if (rcell < RICE) dp = RHOICE;  //after line ice
+      else dp = RHOROCKY; //before line ice
+      m = dp*(4.0/3.0)*Pi*pow(RM,3.0);
+
+      if (RM >= lambda)
+         {
+         if (Remol >= 20.0)
+            {
+            /*WE CALCULATE nfactor (see Takeuchi 2002 - Eq.17)*/ 
+            p = -(SIGMASLOPE - FLARINGINDEX);
+
+            //nfactor = (Pi*(1.0 - 2.0*p)/12800.0)*pow(5.2*rcell/R0,0.5);
+            nfactor = (Pi*(1.0 - 2.0*p)/12800.0)*pow(5.2*apl/R0,0.5);
+
+            /*WE CALCULATE nfactor AND t_drag (see Fortier et. al., 2012 - Eq.37 and 37)*/ 
+            t_drag = (8.0*RHOM*RM)/(3.0*CD*rhogas*vk);
+
+            /*METHOD EULER SEMI IMPLICIT QUADRATIC REGIME*/
+
+            /*OBTAIN dedt FOR ecc0 and inc0*/
+            /*EFFECT OF NEBULAR GAS DRAG*/
+            dedt = -(2.0*ecc0*ecc0/t_drag)*sqrt(9.0*nfactor*nfactor/4.0 + 9.0*epsilon*epsilon*ecc0*ecc0/(4.0*Pi) + inc0*inc0/Pi);
+
+            /*VISCOUS STIRRING PRODUCED BY THE EMBRYOS*/
+            for (kp = 0; kp < Nbpl; kp++)
+                {
+                /*SEMIAXES OF PLANET - CIRCULAR ORBIT*/
+                apl = sqrt(xpl[kp]*xpl[kp] + ypl[kp]*ypl[kp] + zpl[kp]*zpl[kp]);
+ 
+                /*ORBITAL PERIOD*/ 
+                Porbital = (2.0*Pi)*pow((apl*apl*apl)/(G*(MSTAR+mpl[kp])),0.5);
+                     
+                /*HILLS RADIUS*/ 
+                RH = apl*pow(mpl[kp]/(3.0*MSTAR),(1.0/3.0));
+
+                /*ECCENTRICITY AND INCLINATION REDUCED (see Fortier et. al., 2012)*/  
+                ecc_red = apl*ecc0/RH; 
+                inc_red = apl*inc0/RH; 
+
+                /*FACTOR BETA (see Fortier et. al., 2012)*/ 
+                Beta = inc_red/ecc_red;
+
+                /*FACTOR IPVS AND IQVS - (see Fortier et. al., 2012 - Eq.46 and Eq.47)*/
+                IPVS = (Beta - 0.36251)/(0.061547 + 0.16112*Beta + 0.054473*Beta*Beta);
+                IQVS = (0.71946 - Beta)/(0.21239 + 0.49764*Beta + 0.14369*Beta*Beta);
+
+                /*FACTOR LAMBDA (see Fortier et. al., 2012)*/ 
+                Lambda = inc_red*(ecc_red*ecc_red + inc_red*inc_red)/12.0;
+
+                /*FACTOR PVS AND QVS - (see Fortier et. al., 2012 - Eq.44 and Eq.45)*/
+                PVS = ((73.0*ecc_red*ecc_red)/(10.0*Lambda*Lambda))*log(1.0 + 10.0*Lambda*Lambda/(ecc_red*ecc_red));
+                PVS = PVS + (72.0*IPVS/(Pi*ecc_red*inc_red))*log(1.0 + Lambda*Lambda);
+                QVS = (((4.0*inc_red*inc_red)+(0.2*inc_red*ecc_red*ecc_red*ecc_red))/(10.0*Lambda*Lambda*ecc_red));
+                QVS = QVS*log(1.0 +  10.0*Lambda*Lambda*ecc_red);
+                QVS = QVS + (72.0*IQVS/(Pi*ecc_red*inc_red))*log(1.0 + Lambda*Lambda);
+
+                /*FACTOR f_delta - (see Fortier et. al., 2012 - Eq. 50)*/
+                delta =  abs(rcell - apl);           
+                f_delta = pow(delta/(5.0*RH),5.0);
+                f_delta = pow(1.0 + f_delta,-1.0);
+
+                /*STIRRING - (see Fortier et. al., 2012 - Eq. 42 AND 43)*/
+                stirring_e = stirring_e + f_delta*(mpl[kp]/(3.0*B*MSTAR*Porbital))*PVS;
+                } 
+            dedt = dedt + stirring_e;
+            stirring_e = 0.0;
+
+            /*OBTAIN ECC - EQUATIONS IS e^2*/
+            dedt = dedt/(2.0*ecc0);
+
+            /*OBTAIN THE NEW ECC*/
+            ecc1 = ecc0 + dedt*dt;
+
+            /*OBTAIN didt FOR THE NEW ecc1 and OLD inc0*/
+            didt = -(inc0*inc0/(t_drag))*sqrt(nfactor*nfactor + epsilon*epsilon*ecc1*ecc1/Pi + 4.0*inc0*inc0/Pi);
+                
+            /*VISCOUS STIRRING PRODUCED BY THE EMBRYOS*/
+            for (kp = 0; kp < Nbpl; kp++)
+                {
+                /*SEMIAXES OF PLANET - CIRCULAR ORBIT*/
+                apl = sqrt(xpl[kp]*xpl[kp] + ypl[kp]*ypl[kp] + zpl[kp]*zpl[kp]);
+ 
+                /*ORBITAL PERIOD*/ 
+                Porbital = (2.0*Pi)*pow((apl*apl*apl)/(G*(MSTAR+mpl[kp])),0.5);
+                     
+                /*HILLS RADIUS*/ 
+                RH = apl*pow(mpl[kp]/(3.0*MSTAR),(1.0/3.0));
+
+                /*ECCENTRICITY AND INCLINATION REDUCED (see Fortier et. al., 2012)*/  
+                ecc_red = apl*ecc1/RH; 
+                inc_red = apl*inc0/RH; 
+
+                /*FACTOR BETA (see Fortier et. al., 2012)*/ 
+                Beta = inc_red/ecc_red;
+
+                /*FACTOR IPVS AND IQVS - (see Fortier et. al., 2012 - Eq.46 and Eq.47)*/
+                IPVS = (Beta - 0.36251)/(0.061547 + 0.16112*Beta + 0.054473*Beta*Beta);
+                IQVS = (0.71946 - Beta)/(0.21239 + 0.49764*Beta + 0.14369*Beta*Beta);
+
+                /*FACTOR LAMBDA (see Fortier et. al., 2012)*/ 
+                Lambda = inc_red*(ecc_red*ecc_red + inc_red*inc_red)/12.0;
+
+                /*FACTOR PVS AND QVS - (see Fortier et. al., 2012 - Eq.44 and Eq.45)*/
+                PVS = ((73.0*ecc_red*ecc_red)/(10.0*Lambda*Lambda))*log(1.0 + 10.0*Lambda*Lambda/(ecc_red*ecc_red));
+                PVS = PVS + (72.0*IPVS/(Pi*ecc_red*inc_red))*log(1.0 + Lambda*Lambda);
+                QVS = (((4.0*inc_red*inc_red)+(0.2*inc_red*ecc_red*ecc_red*ecc_red))/(10.0*Lambda*Lambda*ecc_red));
+                QVS = QVS*log(1.0 +  10.0*Lambda*Lambda*ecc_red);
+                QVS = QVS + (72.0*IQVS/(Pi*ecc_red*inc_red))*log(1.0 + Lambda*Lambda);
+
+                /*FACTOR f_delta - (see Fortier et. al., 2012 - Eq. 50)*/
+                delta =  abs(rcell - apl);           
+                f_delta = pow(delta/(5.0*RH),5.0);
+                f_delta = pow(1.0 + f_delta,-1.0);
+
+                /*STIRRING - (see Fortier et. al., 2012 - Eq. 42 AND 43)*/
+                stirring_i = stirring_i + f_delta*(mpl[kp]/(3.0*B*MSTAR*Porbital))*QVS;
+                } 
+            didt = didt + stirring_i;
+            stirring_i = 0.0;
+
+            /*OBTAIN INC - EQUATIONS ARE e^2 AND i^2*/
+            didt = didt/(2.0*inc0);
+
+            /*OBTAIN THE NEW INC*/
+            inc1 = inc0 + didt*dt; 
+            }
+         else
+            {
+            /*METHOD EULER SEMI IMPLICIT STOKE REGIME*/
+
+            /*OBTAIN dedt FOR ecc0 and inc0*/
+            /*EFFECT OF NEBULAR GAS DRAG*/
+            dedt = -(3.0/2.0)*(lambda*vs*rhogas*ecc0*ecc0/(RHOM*RM*RM));
+               
+            /*VISCOUS STIRRING PRODUCED BY THE EMBRYOS*/
+            for (kp = 0; kp < Nbpl; kp++)
+                {
+                /*SEMIAXES OF PLANET - CIRCULAR ORBIT*/
+                apl = sqrt(xpl[kp]*xpl[kp] + ypl[kp]*ypl[kp] + zpl[kp]*zpl[kp]);
+ 
+                /*ORBITAL PERIOD*/ 
+                Porbital = (2.0*Pi)*pow((apl*apl*apl)/(G*(MSTAR+mpl[kp])),0.5);
+                     
+                /*HILLS RADIUS*/ 
+                RH = apl*pow(mpl[kp]/(3.0*MSTAR),(1.0/3.0));
+
+                /*ECCENTRICITY AND INCLINATION REDUCED (see Fortier et. al., 2012)*/  
+                ecc_red = apl*ecc0/RH; 
+                inc_red = apl*inc0/RH; 
+
+                /*FACTOR BETA (see Fortier et. al., 2012)*/ 
+                Beta = inc_red/ecc_red;
+
+                /*FACTOR IPVS AND IQVS - (see Fortier et. al., 2012 - Eq.46 and Eq.47)*/
+                IPVS = (Beta - 0.36251)/(0.061547 + 0.16112*Beta + 0.054473*Beta*Beta);
+                IQVS = (0.71946 - Beta)/(0.21239 + 0.49764*Beta + 0.14369*Beta*Beta);
+
+                /*FACTOR LAMBDA (see Fortier et. al., 2012)*/ 
+                Lambda = inc_red*(ecc_red*ecc_red + inc_red*inc_red)/12.0;
+
+                /*FACTOR PVS AND QVS - (see Fortier et. al., 2012 - Eq.44 and Eq.45)*/
+                PVS = ((73.0*ecc_red*ecc_red)/(10.0*Lambda*Lambda))*log(1.0 + 10.0*Lambda*Lambda/(ecc_red*ecc_red));
+                PVS = PVS + (72.0*IPVS/(Pi*ecc_red*inc_red))*log(1.0 + Lambda*Lambda);
+                QVS = (((4.0*inc_red*inc_red)+(0.2*inc_red*ecc_red*ecc_red*ecc_red))/(10.0*Lambda*Lambda*ecc_red));
+                QVS = QVS*log(1.0 +  10.0*Lambda*Lambda*ecc_red);
+                QVS = QVS + (72.0*IQVS/(Pi*ecc_red*inc_red))*log(1.0 + Lambda*Lambda);
+
+                /*FACTOR f_delta - (see Fortier et. al., 2012 - Eq. 50)*/
+                delta =  abs(rcell - apl);           
+                f_delta = pow(delta/(5.0*RH),5.0);
+                f_delta = pow(1.0 + f_delta,-1.0);
+
+                /*STIRRING - (see Fortier et. al., 2012 - Eq. 42 AND 43)*/
+                stirring_e = stirring_e + f_delta*(mpl[kp]/(3.0*B*MSTAR*Porbital))*PVS;
+                }
+            dedt = dedt + stirring_e;
+            stirring_e = 0.0;
+
+            /*OBTAIN ECC - EQUATIONS IS e^2*/
+            dedt = dedt/(2.0*ecc0);
+
+            /*OBTAIN THE NEW ECC*/
+            ecc1 = ecc0 + dedt*dt;
+
+            /*OBTAIN didt FOR THE NEW ecc1 and inc0*/
+            didt = -(3.0/4.0)*(lambda*vs*rhogas*inc0*inc0/(RHOM*RM*RM));
+
+            /*VISCOUS STIRRING PRODUCED BY THE EMBRYOS*/
+            for (kp = 0; kp < Nbpl; kp++)
+                {
+                /*SEMIAXES OF PLANET - CIRCULAR ORBIT*/
+                apl = sqrt(xpl[kp]*xpl[kp] + ypl[kp]*ypl[kp] + zpl[kp]*zpl[kp]);
+ 
+                /*ORBITAL PERIOD*/ 
+                Porbital = (2.0*Pi)*pow((apl*apl*apl)/(G*(MSTAR+mpl[kp])),0.5);
+                     
+                /*HILLS RADIUS*/ 
+                RH = apl*pow(mpl[kp]/(3.0*MSTAR),(1.0/3.0));
+
+                /*ECCENTRICITY AND INCLINATION REDUCED (see Fortier et. al., 2012)*/  
+                ecc_red = apl*ecc1/RH; 
+                inc_red = apl*inc0/RH; 
+
+                /*FACTOR BETA (see Fortier et. al., 2012)*/ 
+                Beta = inc_red/ecc_red;
+
+                /*FACTOR IPVS AND IQVS - (see Fortier et. al., 2012 - Eq.46 and Eq.47)*/
+                IPVS = (Beta - 0.36251)/(0.061547 + 0.16112*Beta + 0.054473*Beta*Beta);
+                IQVS = (0.71946 - Beta)/(0.21239 + 0.49764*Beta + 0.14369*Beta*Beta);
+
+                /*FACTOR LAMBDA (see Fortier et. al., 2012)*/ 
+                Lambda = inc_red*(ecc_red*ecc_red + inc_red*inc_red)/12.0;
+
+                /*FACTOR PVS AND QVS - (see Fortier et. al., 2012 - Eq.44 and Eq.45)*/
+                PVS = ((73.0*ecc_red*ecc_red)/(10.0*Lambda*Lambda))*log(1.0 + 10.0*Lambda*Lambda/(ecc_red*ecc_red));
+                PVS = PVS + (72.0*IPVS/(Pi*ecc_red*inc_red))*log(1.0 + Lambda*Lambda);
+                QVS = (((4.0*inc_red*inc_red)+(0.2*inc_red*ecc_red*ecc_red*ecc_red))/(10.0*Lambda*Lambda*ecc_red));
+                QVS = QVS*log(1.0 +  10.0*Lambda*Lambda*ecc_red);
+                QVS = QVS + (72.0*IQVS/(Pi*ecc_red*inc_red))*log(1.0 + Lambda*Lambda);
+
+                /*FACTOR f_delta - (see Fortier et. al., 2012 - Eq. 50)*/
+                delta =  abs(rcell - apl);           
+                f_delta = pow(delta/(5.0*RH),5.0);
+                f_delta = pow(1.0 + f_delta,-1.0);
+
+                /*STIRRING - (see Fortier et. al., 2012 - Eq. 42 AND 43)*/
+                stirring_i = stirring_i + f_delta*(mpl[kp]/(3.0*B*MSTAR*Porbital))*QVS;
+                }
+            didt = didt + stirring_i;
+            stirring_i = 0.0;
+
+            /*OBTAIN INC - EQUATIONS ARE e^2 AND i^2*/
+            didt = didt/(2.0*inc0);
+
+            /*OBTAIN THE NEW INC*/
+            inc1 = inc0 + didt*dt;     
+            }
+         }
+      else
+         {
+         /*METHOD EULER SEMI IMPLICIT FOR EPSTEIN REGIME*/
+
+         /*OBTAIN dedt FOR ecc0 and inc0*/
+         /*EFFECT OF NEBULAR GAS DRAG*/
+         dedt = -(ecc0*ecc0)*(vs*rhogas/(RHOM*RM));
+
+         /*VISCOUS STIRRING PRODUCED BY THE EMBRYOS*/
+         for (kp = 0; kp < Nbpl; kp++)
+             {
+             /*SEMIAXES OF PLANET - CIRCULAR ORBIT*/
+             apl = sqrt(xpl[kp]*xpl[kp] + ypl[kp]*ypl[kp] + zpl[kp]*zpl[kp]);
+ 
+             /*ORBITAL PERIOD*/ 
+             Porbital = (2.0*Pi)*pow((apl*apl*apl)/(G*(MSTAR+mpl[kp])),0.5);
+                     
+             /*HILLS RADIUS*/ 
+             RH = apl*pow(mpl[kp]/(3.0*MSTAR),(1.0/3.0));
+
+             /*ECCENTRICITY AND INCLINATION REDUCED (see Fortier et. al., 2012)*/  
+             ecc_red = apl*ecc0/RH; 
+             inc_red = apl*inc0/RH; 
+
+             /*FACTOR BETA (see Fortier et. al., 2012)*/ 
+             Beta = inc_red/ecc_red;
+
+             /*FACTOR IPVS AND IQVS - (see Fortier et. al., 2012 - Eq.46 and Eq.47)*/
+             IPVS = (Beta - 0.36251)/(0.061547 + 0.16112*Beta + 0.054473*Beta*Beta);
+             IQVS = (0.71946 - Beta)/(0.21239 + 0.49764*Beta + 0.14369*Beta*Beta);
+
+             /*FACTOR LAMBDA (see Fortier et. al., 2012)*/ 
+             Lambda = inc_red*(ecc_red*ecc_red + inc_red*inc_red)/12.0;
+
+             /*FACTOR PVS AND QVS - (see Fortier et. al., 2012 - Eq.44 and Eq.45)*/
+             PVS = ((73.0*ecc_red*ecc_red)/(10.0*Lambda*Lambda))*log(1.0 + 10.0*Lambda*Lambda/(ecc_red*ecc_red));
+             PVS = PVS + (72.0*IPVS/(Pi*ecc_red*inc_red))*log(1.0 + Lambda*Lambda);
+             QVS = (((4.0*inc_red*inc_red)+(0.2*inc_red*ecc_red*ecc_red*ecc_red))/(10.0*Lambda*Lambda*ecc_red));
+             QVS = QVS*log(1.0 +  10.0*Lambda*Lambda*ecc_red);
+             QVS = QVS + (72.0*IQVS/(Pi*ecc_red*inc_red))*log(1.0 + Lambda*Lambda);
+
+             /*FACTOR f_delta - (see Fortier et. al., 2012 - Eq. 50)*/
+             delta =  abs(rcell - apl);           
+             f_delta = pow(delta/(5.0*RH),5.0);
+             f_delta = pow(1.0 + f_delta,-1.0);
+
+             /*STIRRING - (see Fortier et. al., 2012 - Eq. 42 AND 43)*/
+             stirring_e = stirring_e + f_delta*(mpl[kp]/(3.0*B*MSTAR*Porbital))*PVS;
+             }
+         dedt = dedt + stirring_e;
+         stirring_e = 0.0;
+
+         /*OBTAIN ECC AND INC - EQUATIONS ARE e^2 AND i^2*/
+         dedt = dedt/(2.0*ecc0);
+
+         /*OBTAIN THE NEW ECC*/
+         ecc1 = ecc0 + dedt*dt;
+
+         /*OBTAIN dedt FOR THE NEW ecc1 and inc0*/
+         didt = -(inc0*inc0/2.0)*(vs*rhogas/(RHOM*RM));
+
+         /*VISCOUS STIRRING PRODUCED BY THE EMBRYOS*/
+         for (kp = 0; kp < Nbpl; kp++)
+             {
+             /*SEMIAXES OF PLANET - CIRCULAR ORBIT*/
+             apl = sqrt(xpl[kp]*xpl[kp] + ypl[kp]*ypl[kp] + zpl[kp]*zpl[kp]);
+ 
+             /*ORBITAL PERIOD*/ 
+             Porbital = (2.0*Pi)*pow((apl*apl*apl)/(G*(MSTAR+mpl[kp])),0.5);
+                     
+             /*HILLS RADIUS*/ 
+             RH = apl*pow(mpl[kp]/(3.0*MSTAR),(1.0/3.0));
+
+             /*ECCENTRICITY AND INCLINATION REDUCED (see Fortier et. al., 2012)*/  
+             ecc_red = apl*ecc1/RH; 
+             inc_red = apl*inc0/RH; 
+
+             /*FACTOR BETA (see Fortier et. al., 2012)*/ 
+             Beta = inc_red/ecc_red;
+
+             /*FACTOR IPVS AND IQVS - (see Fortier et. al., 2012 - Eq.46 and Eq.47)*/
+             IPVS = (Beta - 0.36251)/(0.061547 + 0.16112*Beta + 0.054473*Beta*Beta);
+             IQVS = (0.71946 - Beta)/(0.21239 + 0.49764*Beta + 0.14369*Beta*Beta);
+
+             /*FACTOR LAMBDA (see Fortier et. al., 2012)*/ 
+             Lambda = inc_red*(ecc_red*ecc_red + inc_red*inc_red)/12.0;
+
+             /*FACTOR PVS AND QVS - (see Fortier et. al., 2012 - Eq.44 and Eq.45)*/
+             PVS = ((73.0*ecc_red*ecc_red)/(10.0*Lambda*Lambda))*log(1.0 + 10.0*Lambda*Lambda/(ecc_red*ecc_red));
+             PVS = PVS + (72.0*IPVS/(Pi*ecc_red*inc_red))*log(1.0 + Lambda*Lambda);
+             QVS = (((4.0*inc_red*inc_red)+(0.2*inc_red*ecc_red*ecc_red*ecc_red))/(10.0*Lambda*Lambda*ecc_red));
+             QVS = QVS*log(1.0 +  10.0*Lambda*Lambda*ecc_red);
+             QVS = QVS + (72.0*IQVS/(Pi*ecc_red*inc_red))*log(1.0 + Lambda*Lambda);
+
+             /*FACTOR f_delta - (see Fortier et. al., 2012 - Eq. 50)*/
+             delta =  abs(rcell - apl);           
+             f_delta = pow(delta/(5.0*RH),5.0);
+             f_delta = pow(1.0 + f_delta,-1.0);
+
+             /*STIRRING - (see Fortier et. al., 2012 - Eq. 42 AND 43)*/
+             stirring_i = stirring_i + f_delta*(mpl[kp]/(3.0*B*MSTAR*Porbital))*QVS;
+             }
+         didt = didt + stirring_i;
+         stirring_i = 0.0;
+
+         /*OBTAIN INC - EQUATIONS ARE e^2 AND i^2*/
+         didt = didt/(2.0*inc0);
+
+         /*OBTAIN THE NEW INC*/
+         inc1 = inc0 + didt*dt; 
+         } 
+
+      eccpl[ll] = ecc1;
+      incpl[ll] = inc1; 
+//<\#>
+#ifdef X
+      }
+#endif
+#ifdef Y
+    }
+#endif
+#ifdef Z
+  }
+#endif
+//<\MAIN_LOOP>
+}

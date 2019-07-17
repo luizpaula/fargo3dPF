@@ -1,0 +1,49 @@
+#include "fargo3d.h"
+
+void Dens_init(){
+
+  real* Sigma = Density->field_cpu;
+  real* Sigmasol = Sigmam->field_cpu;
+
+  int size_x = Nx+2*NGHX;
+  int size_y = Ny+2*NGHY;
+  int size_z = Nz+2*NGHZ;
+
+  real rcell;
+  real Sigmagas;
+  real dz;
+  int i;
+  int j;
+  int k;
+
+  i = j = k = 0;
+
+  for (k=0;k<size_z;k++) {
+    for (j=0;j<size_y;j++) {
+      for (i=0;i<size_x;i++) {
+
+        /*RADIAL POSITION OF CELL*/
+        #ifdef CARTESIAN
+           rcell = sqrt(xmed(i)*xmed(i) + ymed(j)*ymed(j) + zmed(k)*zmed(k));
+        #endif
+        #ifdef CYLINDRICAL
+           rcell = ymed(j);
+        #endif
+        #ifdef SPHERICAL
+           rcell = ymed(j);
+        #endif
+
+        /*SUPERFICIAL DENSITY OF GAS IN THE CELL, see Armitage - Planet formation - Eq. 2.9*/ 
+        #ifdef Z
+           dz = zmed(1) - zmed(0);
+           Sigmagas = Sigma[l]*dz;
+        #else 
+           Sigmagas = Sigma[l];
+        #endif
+
+        if (rcell < RICE) Sigmasol[l] = Sigmagas*FRI*FDG;
+        else Sigmasol[l] = Sigmagas*1.0*FDG;
+      }
+    }
+  }
+}

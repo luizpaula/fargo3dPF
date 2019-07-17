@@ -1,0 +1,148 @@
+#include "fargo3d.h"
+
+void InitAccSolids()
+{
+  real* Sigmasol = Sigmam->field_cpu;
+  real* eccquad = Eccquad->field_cpu;
+  real* incquad = Incquad->field_cpu;
+  int NbPlanets = Sys->nb;
+  int kp;
+  real* x = Sys->x_cpu;
+  real* y = Sys->y_cpu;
+  real* z = Sys->z_cpu;
+  real* mass = Sys->mass_cpu;
+  real* sigmarms = Sys->sigmarms_cpu;
+  real* eccrms = Sys->eccrms_cpu;
+  real* incrms = Sys->incrms_cpu;
+  real* masscore = Sys->masscore_cpu;
+  real* rcore = Sys->rcore_cpu;
+  real* rcap = Sys->rcap_cpu;
+  real* accsolids = Sys->accsolids_cpu;
+  real* massenv = Sys->massenv_cpu;
+  real* masscrit = Sys->masscrit_cpu;
+
+  real year;
+  real r;
+  real RH;
+  real dy;
+  real rcy;
+  real Porbital;
+  real ecc_red, inc_red;
+  real Beta;
+  real IFBETA;
+  real IGBETA;
+  real Phigh;
+  real Pmed;
+  real Plow;
+  real Pcoll;
+  real temp = 0.0;
+  int index;
+
+  #ifdef MKS
+     year = 31536000.0;
+  #endif
+  #ifdef CGS
+     year = 31536000.0;
+  #endif
+  #if !(defined(MKS) || defined (CGS))
+     year = 31536000.0/(sqrt(R0_MKS*R0_MKS*R0_MKS/G_MKS/MSTAR_MKS));
+  #endif
+
+  for (kp = 0; kp < NbPlanets; kp++)
+     {
+     r = sqrt(x[kp]*x[kp] + y[kp]*y[kp] + z[kp]*z[kp]);
+     RH = r*pow(mass[kp]/(3.0*MSTAR),(1.0/3.0));
+
+     #ifdef Y
+        dy = Ymin(1) - Ymin(0); 
+        #ifdef CARTESIAN/*y -> y*/
+           index = (int)((y[kp]-Ymin(0))/dy);
+        #endif
+        #ifdef CYLINDRICAL/*y -> r*/
+           rcy = sqrt(x[kp]*x[kp] + y[kp]*y[kp]);
+           index = (int)((rcy-Ymin(0))/dy);
+        #endif
+        #ifdef SPHERICAL/*y -> r*/
+           index = (int)((r-Ymin(0))/dy);
+        #endif
+     #endif
+
+     #ifndef __GPU
+     //for MPI situation - subgrids
+     if (index < 0) index = 0;
+     if (index > Ny) index = 0;
+     #endif
+
+     if (index != 0) 
+        {
+        sigmarms[kp]  = reduction_full_SUM(Sigmam,index,index+1,NGHZ,Nz+NGHZ)/NX;
+        eccrms[kp]  = reduction_full_SUM(Eccquad,index,index+1,NGHZ,Nz+NGHZ);
+        incrms[kp]  = reduction_full_SUM(Incquad,index,index+1,NGHZ,Nz+NGHZ);
+        eccrms[kp] = sqrt(eccrms[kp]/NX);
+        incrms[kp] = sqrt(incrms[kp]/NX);
+        }
+     else 
+        {
+        sigmarms[kp] = 0.0;
+        eccrms[kp] = 0.0;
+        incrms[kp] = 0.0;
+        }
+
+     #ifndef __GPU
+     MPI_Allreduce(&sigmarms[kp],&temp,1,MPI_DOUBLE,MPI_SUM,MPI_COMM_WORLD);   
+     sigmarms[kp] = temp;
+
+     MPI_Allreduce(&eccrms[kp],&temp,1,MPI_DOUBLE,MPI_SUM,MPI_COMM_WORLD);   
+     eccrms[kp] = temp;
+
+     MPI_Allreduce(&incrms[kp],&temp,1,MPI_DOUBLE,MPI_SUM,MPI_COMM_WORLD);   
+     incrms[kp] = temp;
+     #endif
+
+     if (mass[kp] > 10.0*MEARTH)
+        {
+        masscore[kp] = 10.0*MEARTH;
+        masscrit[kp] = 10.0*MEARTH;
+        massenv[kp] = mass[kp] - masscore[kp];
+        rcore[kp] = pow(3.0*masscore[kp]/(4.0*PI*RHOM),1.0/3.0);
+        rcap[kp] = rcore[kp];
+        accsolids[kp] = 0.0;
+        }
+     else
+        {
+        masscore[kp] = mass[kp];
+        massenv[kp] = 0.0; 
+        rcore[kp] = pow(3.0*masscore[kp]/(4.0*PI*RHOM),1.0/3.0);
+        rcap[kp] = rcore[kp];
+
+        /*PERIOD ORBITAL*/ 
+        Porbital = (2.0*PI)*pow((r*r*r)/(G*(MSTAR+mass[kp])),0.5);
+
+        /*ECCENTRICITY AND INCLINATION REDUCED (see Fortier et. al., 2012)*/  
+        ecc_red = r*eccrms[kp]/RH;
+        inc_red = r*incrms[kp]/RH;
+
+        /*VALOR OF BETA (see Fortier et. al., 2012)*/ 
+        Beta = inc_red/ecc_red;
+
+        /*IF e IG (Fortier et. al, 2013 - Eq 26 and Eq 27)*/ 
+        IFBETA = (1.0 + 0.95925*Beta + 0.77251*Beta*Beta)/(Beta*(0.13142 + 0.12295*Beta));
+        IGBETA = (1.0 + 0.3996*Beta)/(Beta*(0.0369 + 0.04833*Beta + 0.00687*Beta*Beta));
+
+        /*VALOR FOR PROBABILITIES (Fortier et. al, 2013 - Eq 23, 24 and Eq 27)*/ 
+        Phigh = (pow((rcore[kp] + RM),2.0)/(2.0*PI*RH*RH))*(IFBETA + (6.0*RH*IGBETA)/((rcore[kp] + RM)*ecc_red*ecc_red));
+        Pmed = (pow((rcore[kp] + RM),2.0)/(4.0*PI*RH*RH*inc_red))*(17.3 + (232.0*RH)/(rcore[kp] + RM));
+        Plow = 11.3*pow(((rcore[kp] + RM)/RH),0.5);
+
+        /*VALOR FOR PCOLL (Fortier et. al, 2013 - Eq 28)*/ 
+        Pcoll = pow(Phigh,-2.0) + pow(Plow,-2.0);//PCOLL (Fortier et. al, 2013 - Eq 28)
+        Pcoll = pow(Pcoll,-0.5);
+        Pcoll = MIN(Pmed,Pcoll);
+
+        accsolids[kp] = (2.0*PI*sigmarms[kp]*RH*RH/Porbital)*Pcoll;
+        if (accsolids[kp] < 0.0) accsolids[kp] = 0.0; //for safe
+        
+        masscrit[kp] = 10.0*pow(accsolids[kp]/((MEARTH/year)*10.0e-6),0.25)*MEARTH;
+        }
+    }
+}

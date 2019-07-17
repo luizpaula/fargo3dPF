@@ -1,0 +1,26 @@
+#Boundaries configuration file for wave2d.bound
+#----------------------------------------------
+
+Density:
+	Ymin: NOBOUNDARY 
+	Ymax: NOBOUNDARY
+
+Vx:
+	Ymin:	NOBOUNDARY
+	Ymax:   NOBOUNDARY
+
+Vy:
+	Ymin:	NOBOUNDARY
+	Ymax:   NOBOUNDARY
+
+Sigmam:
+	Ymin:	NOBOUNDARY
+	Ymax:   NOBOUNDARY
+
+Ecc:
+	Ymin:	NOBOUNDARY
+	Ymax:   NOBOUNDARY
+
+Inc:
+	Ymin:	NOBOUNDARY
+	Ymax:   NOBOUNDARY

@@ -1,0 +1,246 @@
+//<FLAGS>
+//#define __GPU
+//#define __NOPROTO
+//<\FLAGS>
+
+//<INCLUDES>
+#include "fargo3d.h"
+//<\INCLUDES>
+
+void Accretion_gas_cpu(real dt, int kp) {
+   
+//<USER_DEFINED>
+  INPUT(Vx);
+  INPUT(Vy);
+  INPUT(Density);
+  INPUT(Energy);
+//<\USER_DEFINED>
+
+//<EXTERNAL>
+  real* cs = Energy->field_cpu;
+  real* dens = Density->field_cpu;
+  real* xpl = Sys->x_cpu;
+  real* ypl = Sys->y_cpu;
+  real* zpl = Sys->z_cpu;
+  real* vxpl = Sys->vx;
+  real* vypl = Sys->vy;
+  real* mpl = Sys->mass_cpu;
+  real* Menv = Sys->menv_cpu;
+  real* Vt = Vx->field_cpu;
+  real* Vr = Vy->field_cpu;
+  int pitch  = Pitch_cpu;
+  int stride = Stride_cpu;
+  int size_x = Nx+2*NGHX;
+  int size_y = Ny+2*NGHY;
+  int size_z = Nz+2*NGHZ;
+//<\EXTERNAL>
+
+//<INTERNAL>
+  real tauKH;
+  real dMdtKH;
+  real dMdtmax;
+  real dMdt;
+  real b = 9.0;
+  real c = 3.0;
+  real year;
+  real vslocal;
+  real RBondi;
+  real RH;
+  real rpl;
+  real dy;
+  real rcel;
+  real xcel;
+  real ycel;
+  real apl;
+  real Raij;
+  real Trij;
+  real facc;
+  real dPxPlanet;
+  real dPyPlanet;
+  real PxPlanet;
+  real PyPlanet;
+  real distance;
+  real dx_cel_pl;
+  real dy_cel_pl;
+  real vxcel;
+  real vycel;
+  real vtcel;
+  real vrcel;
+  real deltaM;
+  real dMPlanet;
+  real temp;
+  int jmin;
+  int jmax;
+  int ll;
+  int i;
+  int j;
+  int k;
+//<\INTERNAL>
+
+//<CONSTANT>
+// real xmin(Nx+1);
+// real ymin(Ny+2*NGHY+1);
+// real zmin(Nz+2*NGHZ+1);
+// real Szj(Ny+2*NGHY);
+// real Szk(Nz+2*NGHZ);
+// real GAMMA(1);
+// real Ny(1);
+// real OMEGAFRAME(1);
+//<\CONSTANT>
+
+//<MAIN_LOOP>
+  i = j = k = 0;
+  dy = ymed(1) - ymed(0);
+
+  dMPlanet = dPxPlanet = dPxPlanet = 0.0;
+  apl = sqrt(xpl[kp]*xpl[kp] + ypl[kp]*ypl[kp] + zpl[kp]*zpl[kp]);
+  RH = apl*pow(mpl[kp]/(3.0*MSTAR),(1.0/3.0));
+
+  /*Kelvin-Helmholtz timescale*/
+  tauKH = pow(10.0,b)*pow(mpl[kp]/MEARTH,-c);
+  #ifdef MKS
+     year = 31536000.0;
+  #endif
+  #ifdef CGS
+     year = 31536000.0;
+  #endif
+  #if !(defined(MKS) || defined (CGS))
+     year = 31536000.0/(sqrt(R0*R0*R0/G/MSTAR));
+  #endif
+  tauKH = tauKH*year;
+  dMdtKH = mpl[kp]/tauKH;
+
+  /**Momentum of the planet in cartesian (padrão do planeta no FARGO)**/
+  PxPlanet = mpl[kp]*vxpl[kp];
+  PyPlanet = mpl[kp]*vypl[kp];
+
+#ifdef Z
+  for (k=0;k<size_z;k++) {
+#endif
+#ifdef Y
+    for (j=0;j<size_y;j++) {
+#endif
+#ifdef X
+      for (i=0;i<size_x;i++) {
+#endif
+//<#>
+         ll = l;
+
+         /*we calculate the speed of sound in the cell*/
+         #ifdef ISOTHERMAL
+            vslocal = cs[ll];
+         #endif
+         #ifdef ADIABATIC /*vslocal^2 =sqrt(gamma) * (gamma - 1) * e*/
+            vslocal = sqrt(GAMMA * (GAMMA - 1.0) * cs[ll]/dens[ll]); 
+         #endif
+         #ifdef POLYTROPIC
+            vslocal = sqrt(cs[ll]*gamma*pow(dens[ll],GAMMA-1.0));
+         #endif
+ 
+         /*Radius of Bondi*/
+         RBondi = 2.0*G*mpl[kp]/(vslocal*vslocal);
+
+         Raij = MIN(RBondi,RH);
+
+         #ifdef CARTESIAN/*i -> x, j -> y, k -> z */
+            jmax = (int)(((ypl[kp]+Raij)-ymin(0))/dy);
+            jmin = (int)(((ypl[kp]-Raij)-ymin(0))/dy);
+         #endif
+
+         #ifdef CYLINDRICAL/*i -> x (azimuthal angle), j -> y (cylindrical radius), k -> z */
+            rpl = sqrt(xpl[kp]*xpl[kp] + ypl[kp]*ypl[kp]); //cylindrical radius
+            jmax = (int)(((rpl+Raij)-ymin(0))/dy);
+            jmin = (int)(((rpl-Raij)-ymin(0))/dy);
+         #endif
+
+         #ifdef SPHERICAL/*i -> x (azimuthal angle), j -> y (spherical radius), k -> z (colatitude)*/
+            jmax = (int)(((apl+Raij)-ymin(0))/dy);
+            jmin = (int)(((apl-Raij)-ymin(0))/dy);
+         #endif
+
+        //problem with boundary processor, this is a solution
+        if (jmin < 0){ 
+           jmin = 0;
+           }
+        if (jmax < 0){
+           jmax = 0;
+           }
+        if (jmin > Ny){ 
+           jmin = Ny;
+           }
+        if (jmax > Ny){ 
+           jmax = Ny;
+           }
+
+        if (jmin != jmax){
+            #ifdef CARTESIAN/*i -> x, j -> y, k -> z */ 
+               xcel = xmed(j);
+               ycel = ymed(j);
+               vxcel = Vt[ll];
+               vycel = Vr[ll];       
+            #endif
+
+            #ifdef CYLINDRICAL/*i -> x (azimuthal angle), j -> y (cylindrical radius), k -> z */
+               rcel = ymed(j);
+               xcel = rcel*cos(xmed(i));
+               ycel = rcel*sin(xmed(i));
+               vtcel = 0.5*(Vt[ll] + Vt[lxp]) + ymed(j)*OMEGAFRAME;
+               vrcel = 0.5*(Vr[ll] + Vr[lyp]);
+               vxcel = (vrcel*xcel - vtcel*ycel)/ymed(j);
+               vycel = (vrcel*ycel + vtcel*xcel)/ymed(j);
+            #endif
+
+            #ifdef SPHERICAL/*i -> x (azimuthal angle), j -> y (spherical radius), k -> z (colatitude)*/
+                 //working
+            #endif
+
+            dx_cel_pl = xpl[kp] - xcel;
+            dy_cel_pl = ypl[kp] - ycel;
+            distance = sqrt(dx_cel_pl*dx_cel_pl + dy_cel_pl*dy_cel_pl);
+        
+            if (distance < Raij){
+               Trij = 2.0*Pi*sqrt(Raij*Raij*Raij/(G*mpl[kp]));
+               facc = dt/Trij;
+               deltaM = facc*dens[ll]*SurfZ(j,k);
+               //dens[ll] *= (1.0 - facc);
+               //dPxPlanet += deltaM*vxcel;
+               //dPyPlanet += deltaM*vycel;
+               dMPlanet += deltaM;
+               }
+            }
+         else
+            {
+            dMPlanet = 0.0;
+            deltaM = 0.0;
+            }  
+//<\#>
+#ifdef X
+      }
+#endif
+#ifdef Y
+    }
+#endif
+#ifdef Z
+  }
+#endif
+
+  MPI_Allreduce(&dMPlanet,&temp,1,MPI_DOUBLE,MPI_SUM,MPI_COMM_WORLD);
+  dMPlanet = temp;
+
+  dMdtmax = dMPlanet/dt;
+
+  dMdt = MIN(dMdtKH,dMdtmax);
+  dMPlanet = dMdt*dt;
+              
+  PyPlanet += dPyPlanet;
+  PxPlanet += dPxPlanet;
+
+  if (Sys->FeelDisk[kp] == YES){
+     vxpl[kp] = PxPlanet/mpl[kp];
+     vypl[kp] = PyPlanet/mpl[kp];
+     }
+
+  Menv[kp]+= dMPlanet;
+  mpl[kp] += Menv[kp];
+//<\MAIN_LOOP>
+}

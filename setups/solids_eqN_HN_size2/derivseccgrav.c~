@@ -1,0 +1,114 @@
+//<FLAGS>
+//#define __GPU
+//#define __NOPROTO
+//<\FLAGS>
+
+//<INCLUDES>
+#include "fargo3d.h"
+//<\INCLUDES>
+
+void Derivseccgrav_cpu(real m, real RH, real rsmoothing, real r, real Porbital) {
+
+//<USER_DEFINED>
+  INPUT(Ecc);
+  INPUT(Inc);
+  INPUT(Dedtgrav);
+  OUTPUT(Dedtgrav);
+//<\USER_DEFINED>
+
+//<EXTERNAL>
+  real* ecc = Ecc->field_cpu;
+  real* inc = Inc->field_cpu;
+  real* dedtgrav = Dedtgrav->field_cpu;
+  int pitch  = Pitch_cpu;
+  int stride = Stride_cpu;
+  int size_x = Nx+2*NGHX;
+  int size_y = Ny+2*NGHY;
+  int size_z = Nz+2*NGHZ;
+//<\EXTERNAL>
+
+//<INTERNAL>
+  real rcell;
+  real ecc_red;
+  real inc_red;
+  real Beta;
+  real IPVS;
+  real Lambda;
+  real PVS;
+  real f_delta;
+  real delta;
+  int i;
+  int j;
+  int k;
+  int ll;
+//<\INTERNAL>
+
+//<CONSTANT>
+// real xmin(Nx+2*NGHX+1);
+// real ymin(Ny+2*NGHY+1);
+// real zmin(Nz+2*NGHZ+1);
+// real B(1);
+//<\CONSTANT>
+
+//<MAIN_LOOP>
+
+  i = j = k = 0;
+
+#ifdef Z
+  for (k=0; k<size_z; k++) {
+#endif
+#ifdef Y
+    for (j=0; j<size_y; j++) {
+#endif
+#ifdef X
+      for (i=0; i<size_x; i++) {
+#endif
+//<#>
+      ll = l;
+
+      /*RADIAL POSITION OF CELL*/
+      #ifdef CARTESIAN
+         rcell = sqrt(xmed(i)*xmed(i) + ymed(j)*ymed(j) + zmed(k)*zmed(k));
+      #endif
+      #ifdef CYLINDRICAL
+         rcell = ymed(j);
+      #endif
+      #ifdef SPHERICAL
+         rcell = ymed(j);
+      #endif
+
+      /*ECCENTRICITY AND INCLINATION REDUCED (see Fortier et. al., 2012)*/  
+      ecc_red = r*ecc[ll]/RH; 
+      inc_red = r*inc[ll]/RH; 
+
+      /*FACTOR BETA (see Fortier et. al., 2012)*/ 
+      Beta = inc_red/ecc_red;
+
+      /*FACTOR IPVS AND IQVS - (see Fortier et. al., 2012 - Eq.46 and Eq.47)*/
+      IPVS = (Beta - 0.36251)/(0.061547 + 0.16112*Beta + 0.054473*Beta*Beta);
+
+      /*FACTOR LAMBDA (see Fortier et. al., 2012)*/ 
+      Lambda = inc_red*(ecc_red*ecc_red + inc_red*inc_red)/12.0;
+
+      /*FACTOR PVS AND QVS - (see Fortier et. al., 2012 - Eq.44 and Eq.45)*/
+      PVS = ((73.0*ecc_red*ecc_red)/(10.0*Lambda*Lambda))*log(1.0 + 10.0*Lambda*Lambda/(ecc_red*ecc_red));
+      PVS = PVS + (72.0*IPVS/(Pi*ecc_red*inc_red))*log(1.0 + Lambda*Lambda);
+
+      /*FACTOR f_delta - (see Fortier et. al., 2012 - Eq. 50)*/
+      delta =  abs(rcell - (r+rsmoothing));           
+      f_delta = pow(delta/(5.0*RH),5.0);
+      f_delta = pow(1.0 + f_delta,-1.0);
+
+      dedtgrav[ll] = dedtgrav[ll] + f_delta*(m/(3.0*B*MSTAR*Porbital))*PVS;
+//<\#>
+#ifdef X
+      }
+#endif
+#ifdef Y
+    }
+#endif
+#ifdef Z
+  }
+#endif
+//<\MAIN_LOOP>
+}
